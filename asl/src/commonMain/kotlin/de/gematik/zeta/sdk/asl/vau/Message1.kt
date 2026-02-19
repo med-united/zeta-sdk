@@ -110,7 +110,7 @@ internal suspend fun processMessage1Response(
     )
 }
 
-private fun getCid(headers: Headers): String {
+public fun getCid(headers: Headers): String {
     val ct = headers[HttpHeaders.ContentType]?.lowercase() ?: ""
     require(ct.startsWith("application/cbor")) { "Expected application/cbor, got: $ct" }
 

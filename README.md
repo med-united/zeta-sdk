@@ -41,15 +41,16 @@ clients.
 
 Folders for core SDK functionality and clients.
 
-| Verzeichnis      | Beschreibung                       |
-|------------------|------------------------------------|
-| zeta-sdk         | Core SDK Modul                     |
-| zeta-client      | Code for the demo client           |
-| zeta-client-java | Code for the Java client           |
-| zeta-client-cpp  | Code for the C++ client            |
-| zeta-client      | Code for the demo client           |
-| zeta-testdriver  | Code for the test proxy client     |
-| docs             | Further code-related documentation |
+| Verzeichnis         | Beschreibung                                           |
+|---------------------|--------------------------------------------------------|
+| zeta-sdk            | Core SDK Modul                                         |
+| zeta-client         | Code for the demo client                               |
+| zeta-client-java    | Code for the Java client                               |
+| zeta-client-cpp     | Code for the C++ client                                |
+| zeta-client         | Code for the demo client                               |
+| zeta-testdriver     | Code for the test proxy client                         |
+| attestation-service | Code for the attestation service for Windows and Linux |
+| docs                | Further code-related documentation                     |
 
 The different clients serve different purposes:
 
@@ -120,23 +121,27 @@ To do this, add this dependency to your maven pom file:
 ````
 Here is [The Maven repository homepage](https://mvnrepository.com/artifact/de.gematik.zeta/zeta-sdk-jvm).
 
-
 ## The clients
 
 The next sections contain information about the clients.
 
 All clients implement at least the "hellozeta" call to show how the integration of the
-kotlin code/library is done.
+kotlin code/library is done. The Java and C++ base clients also show how to use
+the websockets interface.
 
 The demo-client can use the functional interface of the Test Fachdienst (test resource server),
 and can thus create presciptions, show them, modify them, and delete them.
 
-The test-driver is a proxy client that just forwards the HTTP(S) requests it receives
+The testdriver is a proxy client that just forwards the HTTP(S) requests it receives
 to the given resource server, but using the PEP endpoint and the necessary ZETA and ASL
 protocols. In addition, it also provides the websockets interface.
+It can be run in a container, allowing for easy proxying of functional test clients
+through ZETA SDK and ZETA Guard to an actual resource server. A ready to use
+container image is provided.
 
 The Java and C++ clients are proof-of-technology clients that only implement the
 "hellozeta" call, to show how the SDK can be integrated into clients with this technology.
+In addition, they use the websockets functionality to connect to the test resource server.
 
 ### Build Configuration
 
@@ -175,25 +180,28 @@ In a real client (like a practice management system) these should be provided by
 
 Here are the items you need to adapt:
 
-| Value                     | Description                                                                                                                                              | Example                                                    |
-|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------|
-| FACHDIENST_URL            | URL of the resource server as reachable via the PEP                                                                                                      | https://fachdienst.host.example.com/pep/fachdienst_url/api |
-| SMB_KEYSTORE_FILE         | Path to the SM-B Certificate-File (in .p12 format)                                                                                                       | /smcb-certificates.p12                                     |
-| SMB_KEYSTORE_ALIAS        | Alias of the key in the SM-B Certificate file                                                                                                            |                                                            |
-| SMB_KEYSTORE_PASSWORD     | Password for the private key                                                                                                                             |                                                            |
-| SMCB_BASE_URL             | base url of the konnektor webservice interface (needs to include the "/ws")                                                                              |                                                            |
-| SMCB_MANDANT_ID           | <mandanten-ID>  for connector calls                                                                                                                      |                                                            |
-| SMCB_CLIENT_SYSTEM_ID     | <client_system_id>  for connector calls                                                                                                                  |                                                            |
-| SMCB_WORKSPACE_ID         | <workspace_id> for connector calls                                                                                                                       |                                                            |
-| SMCB_USER_ID              | <user-id> - is required for SMC-B but is being ignored                                                                                                   |                                                            |
-| SMCB_CARD_HANDLE          | <smcb-card-handle>                                                                                                                                       |                                                            |
-| POPP_TOKEN                | Value of a PoPP Tokens, which is given to the PEP (optional)                                                                                             | eyJhbGciOiJFUzI1NiI......                                  |
-| DISABLE_SERVER_VALIDATION | If set to "true", TLS server TLS certificate checks are disabled (for testing only!)                                                                     |                                                            |
-| WS_SERVER_CONTEXT_PATH    | Specifies the base context to target the resource server. It is used in the Java client to prefix STOMP Websockets destinations                          | /testfachdienst                                            |
-| ASL_PROD                  | Defines whether the client runs in Productive or Non Productive mode. If set to "false" exposes the ASL symmetric keys: K2_c2s_app_data and K2_s2c_app   | by default is set to "true" (productive environment)       |
+| Value                     | Description                                                                                                                                            | Example                                                   |
+|---------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------|
+| FACHDIENST_URL            | URL of the resource server as reachable via the PEP                                                                                                    | https://fachdienst.host.example.com/pep/fachdienst_url/api |
+| SMB_KEYSTORE_FILE         | Path to the SM-B Certificate-File (in .p12 format)                                                                                                     | /smcb-certificates.p12                                    |
+| SMB_KEYSTORE_ALIAS        | Alias of the key in the SM-B Certificate file                                                                                                          |                                                           |
+| SMB_KEYSTORE_PASSWORD     | Password for the private key                                                                                                                           |                                                           |
+| SMCB_BASE_URL             | base url of the konnektor webservice interface (needs to include the "/ws")                                                                            |                                                           |
+| SMCB_MANDANT_ID           | <mandanten-ID>  for connector calls                                                                                                                    |                                                           |
+| SMCB_CLIENT_SYSTEM_ID     | <client_system_id>  for connector calls                                                                                                                |                                                           |
+| SMCB_WORKSPACE_ID         | <workspace_id> for connector calls                                                                                                                     |                                                           |
+| SMCB_USER_ID              | <user-id> - is required for SMC-B but is being ignored                                                                                                 |                                                           |
+| SMCB_CARD_HANDLE          | <smcb-card-handle>                                                                                                                                     |                                                           |
+| POPP_TOKEN                | Value of a PoPP Tokens, which is given to the PEP (optional)                                                                                           | eyJhbGciOiJFUzI1NiI......                                 |
+| DISABLE_SERVER_VALIDATION | If set to "true", TLS server TLS certificate checks are disabled (for testing only!)                                                                   |                                                           |
+| WS_SERVER_CONTEXT_PATH    | Specifies the base context to target the resource server. It is used in the Java client to prefix STOMP Websockets destinations                        | /testfachdienst                                           |
+| WS_BASE_URL               | Defines the Websocket base URL (including protocol: ws/wss)                                                                                            | wss://host/resource/ws                                    |
+| ASL_PROD                  | Defines whether the client runs in Productive or Non Productive mode. If set to "false" exposes the ASL symmetric keys: K2_c2s_app_data and K2_s2c_app | by default is set to "true" (productive environment)      |
+
 
 Note that two sets of configuration variables for the SM(C)-B client authentication are provided,
 one for the SM-B certificate file, another for the SMC-B connector interface.
+
 **Only one set of these needs to be provided**
 
 ## The demo client
@@ -238,15 +246,8 @@ SMB_KEYSTORE_FILE=<sm-b-keystore-file>.p12
 SMB_KEYSTORE_ALIAS=<key-alias-im-keystore-file>
 SMB_KEYSTORE_PASSWORD=<keystore-password>
 
-SMCB_BASE_URL=<basis_url_des_konnektor_webservice_interface>
-SMCB_MANDANT_ID=<mandanten-ID>
-SMCB_CLIENT_SYSTEM_ID=<client_system_id>
-SMCB_WORKSPACE_ID=<workspace_id>
-SMCB_USER_ID=<user-id>
-SMCB_CARD_HANDLE=<smcb-card-handle>
-
-DISABLE_SERVER_VALIDATION=true
 POPP_TOKEN=eyJhbGciOiJ......
+...
 ````
 
 *Note: the resource server URL is here named differently as 'ENVIRONMENTS', as there are multiple
@@ -381,101 +382,9 @@ The SMB keystore file is being mounted as kubernetes secret.
 
 Other values are also set by helm variables, like the used image repository, version, etc.
 
-Here's the example Deployment descriptor:
-```
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: testdriver
-  labels:
-    component: testdriver
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: testdriver
-  template:
-    metadata:
-      labels:
-        app: testdriver
-        component: testdriver
-      {{- if .Values.devMode }}
-      annotations:
-        zeta.dev/rollout-timestamp: "{{ now | unixEpoch }}"
-      {{- end }}
-    spec:
-      securityContext:
-        fsGroup: 1000
-      imagePullSecrets:
-        - name: gitlab-registry-credentials-zeta-group
-      containers:
-        - name: testdriver
-          image: "{{ default (printf "%s%s" .Values.global.registry_host .Values.registry_name) .Values.image.registry }}{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: "{{ .Values.image.pullPolicy }}"
-          ports:
-            - containerPort: {{ .Values.containerPort }}
-          volumeMounts:
-            - name: smcb-keystore
-              mountPath: "/smcb-certificates.p12"
-              subPath: "smcb-certificates.p12"
-              readOnly: true
-          env:
-            - name: FACHDIENST_URL
-              value: {{ .Values.fachdienst_url }}
-            - name: DISABLE_SERVER_VALIDATION
-              value: {{ quote .Values.disableServerValidation }}
-            - name: POPP_TOKEN
-              value: {{ .Values.PoppToken | quote }}
-            - name: SMB_KEYSTORE_FILE
-              value: "/smcb-certificates.p12"
-            - name: SMB_KEYSTORE_ALIAS
-              value: "zeta.c_smcb_aut"
-            - name: SMB_KEYSTORE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: pdp-smcb-keystore
-                  key: password
-            - name: SMCB_BASE_URL
-              value: {{ .Values.connector_base_url }}
-            - name: SMCB_MANDANT_ID
-              value: {{ .Values.connector_mandant_id }}
-            - name: SMCB_CLIENT_SYSTEM_ID
-              value: {{ .Values.connector_client_system_id }}
-            - name: SMCB_WORKSPACE_ID
-              value: {{ .Values.connector_workspace_id }}
-            - name: SMCB_USER_ID
-              value: {{ .Values.connector_user_id }}
-            - name: SMCB_CARD_HANDLE
-              value: {{ .Values.connector_card_handle }}
-      volumes:
-        - name: smcb-keystore
-          secret:
-            secretName: pdp-smcb-keystore
-            items:
-              - key: keystore
-                path: "smcb-certificates.p12"
-```
-
-The corresponding service.yml looks as follows:
-
-```
-apiVersion: v1
-kind: Service
-metadata:
-  name: testdriver
-spec:
-  selector:
-    app: testdriver
-  ports:
-    - name: http
-      port: 80
-      targetPort: 8080
-  type: ClusterIP
-
-```
-
-Note: in case of doubt, have a look at the current versions of these files
-in the zeta-guard-helm repository.
+A helm chart template for the Deployment descriptor can be found in the
+[gematik ZETA github repository](https://github.com/gematik/zeta-guard-helm/tree/main/charts/test-driver/templates)
+This folder includes examples for the ingress and the service definitions.
 
 ### Continuous Integration
 
@@ -530,6 +439,16 @@ The C++ file "hello.cpp" in zeta-client-cpp/src/main/cpp shows how to integrate 
 
 ### Building the C++ client
 
+#### Prerequisites
+
+To compile the C++ client, a C++ development environment needs to be installed, like for example
+
+- MinGW (Windows)
+- gcc/g++ or clang/clang++ (Linux)
+
+
+#### Building and running the client
+
 The C++ client can be built with
 
 ````
@@ -541,6 +460,72 @@ and it can be run with
 ````
 ./gradlew zeta-client-cpp:allTests
 ````
+
+## The attestation service
+
+The attestation service is a service that runs locally alongside the Zeta SDK client.
+It provides TPM-based attestation capabilities for Windows and Linux, allowing the SDK
+to perform platform attestation as part of the ZETA protocol.
+
+The SDK communicates with the attestation service locally to perform TPM operations, such as
+quote generation and PCR-based attestation. The endpoint of the attestation must be configured
+in the SDK configuration so the SDK can connect to it.
+
+### Prerequisites
+  - A PC with Windows or Linux
+  - Installed JDK
+  - OpenSSL 3.X installed (libcrypto)
+
+### Note on TSS2 libraries
+
+The TSS2 libraries (tpm2-tss) are bundled as static libraries within the project and do not need to be installed separately.
+At runtime, the attestation service requires access to a TPM 2.0 device.
+
+### Configuration
+
+The attestation service uses its own configuration file, and can also be configured via command line arguments.
+
+| Argument               | Description                                             |
+|------------------------|---------------------------------------------------------|
+| --config-file          | Path to the configuration file (required)               |
+| --reset-file-integrity | If present, resets the file integrity state on startup  |
+
+
+#### Configuration file properties
+
+| Property            | Description                                                                                   | Required | Default |
+|---------------------|-----------------------------------------------------------------------------------------------|----------|---------|
+| FILES               | Comma-separated list of files to monitor for integrity                                        | Yes      | -       |
+| SERVER_PORT         | Port on which the attestation service listen                                                  | No       | 8081    |
+| PCR_ID              | TPM PCR register ID used for file integrity measurements (existing data will be overwritten!) | No       | 23      |
+| ALLOWED_EXECUTABLES | Comma-separated list of allowed executable paths for process monitoring                       | Yes      | -       |
+
+#### Example configuration file
+
+````
+FILES=/path/to/file1,=/path/to/file1
+SERVER_PORT=8081
+PCR_ID=23
+ALLOWED_EXECUTABLES=/usr/bin/app1
+````
+
+### Building attestation service for Linux
+
+````
+./gradlew :attestation-service:linkReleaseExecutableLinux64
+````
+
+### API Endpoints
+
+The attestation serivice exposes the following HTTP and Websocket endpoints:
+
+| endpoint             | method    | purpose                                                                                                                                             |
+|----------------------|-----------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| /attest              | POST      | Performs a TMP attestation. Accepts AttestationRequest JSON body and returns the TPM quote, signature and attestation key.                          |
+| /verify-integrity    | POST      | Verifies the integrity of the monitored files. Returns the integrity verification result.                                                           |
+| /integrity           | Websocket | Provides real-time file integrity monitoring. On connection, sends current state. Subsequently pushes updates whenever the integrity state changes. |
+| /health              | GET       | Health check endpoint. Return current status of the attestation service.                                                                            |
+
 
 ## Usage of the SDK
 
@@ -572,7 +557,7 @@ class ZetaSdkTest {
         val sdk = ZetaSdk.build(
             "https://<resource-url>",
             BuildConfig(
-                "demo_client",
+                "demo-client",
                 "0.2.0",
                 "client-sdk",
                 StorageConfig(),
@@ -584,6 +569,7 @@ class ZetaSdkTest {
                     30,
                     true,
                     SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")),
+                    AttestationConfig.software(),
                 ),
             ),
         )
@@ -639,7 +625,7 @@ is then uninterrupted by manual interaction.
 The configuration is done by passing the BuildConfig object to the ZetaSdkClient.
 This object contains the following attributes and sub-objects.
 
-| BuildConfig Attribut   | Description                                                                              |
+| BuildConfig Attribute  | Description                                                                              |
 |------------------------|------------------------------------------------------------------------------------------|
 | productId              | The gematik Product-ID                                                                   |
 | productVersion         | The version of the product                                                               |
@@ -659,13 +645,23 @@ Details are still to be determined.
 
 The AuthConfig object configures the authentication process:
 
-| Attribute            | Description                                                                                                  |
-|----------------------|--------------------------------------------------------------------------------------------------------------|
-| scopes               | Scope-values for the Access Tokens                                                                           |
-| exp                  | The expiration time of the JWT as lifetime duration in seconds                                               |
-| aslProdEnvironment   | Determines if the client runs non/production environment. The ASL keys can be accessed if it is set to false |
-| subjectTokenProvider | a class that provides a subject token, either SM-B or SMC-B depending on the implementation                  |
+| Attribute            | Description                                                                                                         |
+|----------------------|---------------------------------------------------------------------------------------------------------------------|
+| scopes               | Scope-values for the Access Tokens                                                                                  |
+| exp                  | The expiration time of the JWT as lifetime duration in seconds                                                      |
+| aslProdEnvironment   | Determines if the client runs non/production environment. The ASL keys can be accessed if it is set to false        |
+| subjectTokenProvider | a class that provides a subject token, either SM-B or SMC-B depending on the implementation                         |
+| attestation          | Configures the attestation mode and connection to the attestation service. Defaults to AttestationConfig.software   |
 
+#### AttestationConfig
+
+The attestation config allows three atteatation modes:
+
+| Mode      | Factory method                | Description                                                                                                                        |
+|-----------|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| Software  | AttestationConfig.software()  | Software-based attestation without TPM (default if no other specified)                                                             |
+| TpmHttp   | AttestationConfig.tpmHttp()   | TPM-based attestation via HTTP conenction to the attestation service. The SDK connects to the service using the configured endpoint |
+| TpmCustom | AttestationConfig.tpmCustom() | TPM-based attestation using a custom AttestationService implementation provided by the client application                          |
 
 ### StorageConfig
 

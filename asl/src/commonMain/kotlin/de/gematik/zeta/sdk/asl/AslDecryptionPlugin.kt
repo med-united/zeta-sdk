@@ -43,10 +43,10 @@ import kotlinx.io.Source
 import kotlinx.io.readByteArray
 
 /** ASL decryption plugin */
-public fun aslDecryptionPlugin(aslApi: AslApi): ClientPlugin<Unit> =
+public fun aslDecryptionPlugin(aslApi: AslApi, innerHttpCodec: InnerHttpCodec): ClientPlugin<Unit> =
     createClientPlugin("AslDecryptionPlugin") {
         val decryptPhase = PipelinePhase("AslDecrypt")
-        client.responsePipeline.insertPhaseBefore(HttpResponsePipeline.Transform, decryptPhase)
+        client.responsePipeline.insertPhaseBefore(HttpResponsePipeline.Receive, decryptPhase)
         client.responsePipeline.intercept(decryptPhase) {
             val (typeInfo, subject) = it
             val response = context.response
@@ -72,7 +72,7 @@ public fun aslDecryptionPlugin(aslApi: AslApi): ClientPlugin<Unit> =
                 }
 
                 val innerPlain = aslApi.decrypt(encryptedBytes)
-                val innerResponse = InnerHttpCodec().decodeResponse(innerPlain)
+                val innerResponse = innerHttpCodec.decodeResponse(innerPlain)
 
                 context.attributes.put(InnerStatusKey, innerResponse.status)
                 context.attributes.put(InnerHeadersKey, innerResponse.headers)
@@ -85,7 +85,7 @@ public fun aslDecryptionPlugin(aslApi: AslApi): ClientPlugin<Unit> =
         }
     }
 
-private fun shouldDecryptResponse(response: HttpResponse): Boolean {
+public fun shouldDecryptResponse(response: HttpResponse): Boolean {
     val path = response.request.url.encodedPath
     val contentType = response.headers[HttpHeaders.ContentType]
     return isAslEncryptedResponse(path, contentType)

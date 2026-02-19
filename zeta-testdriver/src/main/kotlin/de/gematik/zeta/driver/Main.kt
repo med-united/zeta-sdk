@@ -30,7 +30,6 @@ import de.gematik.zeta.sdk.StorageConfig
 import de.gematik.zeta.sdk.TpmConfig
 import de.gematik.zeta.sdk.ZetaSdk
 import de.gematik.zeta.sdk.ZetaSdkClient
-import de.gematik.zeta.sdk.attestation.model.ClientSelfAssessment
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
@@ -344,7 +343,10 @@ private suspend fun forwardWs(
 ) = coroutineScope {
     val customHeaders = wsCustomHeaders()
 
-    sdk.ws(targetUrl, { logging(LogLevel.ALL, logger) }, customHeaders) {
+    sdk.ws(targetUrl, {
+        logging(LogLevel.ALL, logger)
+        disableServerValidation("true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()))
+    }, customHeaders) {
         val backendSession = this
 
         val client = launch {
@@ -405,7 +407,7 @@ private fun configureSdk(): ZetaSdkClient {
     val sdk = ZetaSdk.build(
         resource = testFachDienstUrl,
         BuildConfig(
-            "test_proxy",
+            "test-proxy",
             "0.2.0",
             "sdk-client",
             StorageConfig(store),
@@ -442,7 +444,7 @@ private fun configureSdk(): ZetaSdkClient {
                         error("No SM-B or SMC-B configuration was provided")
                 },
             ),
-            clientSelfAssessment = ClientSelfAssessment("name", "clientId", "manufacturerId", "manufacturerName", "test@manufacturertestmail.de", registrationTimestamp = 0, PlatformProductId.AppleProductId("apple", "macos", listOf("bundleX"))),
+            platformProductId = PlatformProductId.LinuxProductId("linux", "packagingType", "test-driver", "0.1.2"),
             ZetaHttpClientBuilder()
                 .disableServerValidation("true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()))
                 .logging(LogLevel.ALL, logger),

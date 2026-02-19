@@ -103,7 +103,9 @@ fun Project.setupBuildLogic(block: Project.() -> Unit) {
                 if (project.isAndroidEnabled) {
                     androidTarget()
                 }
-                jvm()
+                if (project.isJvmEnabled) {
+                    jvm()
+                }
                 // TODO: Disable x64 builds once we've migrated to arm64 runners
                 if (project.isIOSEnabled) {
                     allIos(x64 = isRunningOnCi || !onArm64)
@@ -151,8 +153,10 @@ fun Project.setupBuildLogic(block: Project.() -> Unit) {
                         mingwX64(configure)
                     }
                 }
-                sourceSets["jvmCommonTest"].dependencies {
-                    junit4()
+                if (isJvmEnabled) {
+                    sourceSets["jvmCommonTest"].dependencies {
+                        junit4()
+                    }
                 }
             }
             assemblePullRequest.dependsOn(
@@ -161,16 +165,18 @@ fun Project.setupBuildLogic(block: Project.() -> Unit) {
             assemblePublication.dependsOn(
                 "assembleRelease",
             )
-            assembleShared.dependsOn(
-                "compileKotlinIosArm64",
-                if (onArm64) "compileTestKotlinIosArm64" else "compileTestKotlinIosX64",
-                "jvmJar"
-            )
-            testAll.dependsOn(
-                "testDebugUnitTest",
-                "jvmTest",
-                if (onArm64) "iosSimulatorArm64Test" else "iosX64Test",
-            )
+            if (isJvmEnabled) {
+                assembleShared.dependsOn(
+                    "compileKotlinIosArm64",
+                    if (onArm64) "compileTestKotlinIosArm64" else "compileTestKotlinIosX64",
+                    "jvmJar"
+                )
+                testAll.dependsOn(
+                    "testDebugUnitTest",
+                    "jvmTest",
+                    if (onArm64) "iosSimulatorArm64Test" else "iosX64Test",
+                )
+            }
         }
         if (extensions.findByType<KotlinJvmExtension>() != null) {
             setupKotlinJvm {

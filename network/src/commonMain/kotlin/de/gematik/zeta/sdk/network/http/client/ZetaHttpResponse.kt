@@ -123,6 +123,6 @@ public val zetaJson: Json = Json {
 }
 
 public fun isAslEncryptedResponse(path: String, contentType: String?): Boolean {
-    return path.startsWith("/ASL/") &&
+    return path.lowercase().startsWith("/asl/") &&
         contentType?.startsWith(ContentType.Application.OctetStream.toString()) == true
 }

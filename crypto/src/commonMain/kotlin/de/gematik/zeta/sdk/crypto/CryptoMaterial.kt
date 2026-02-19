@@ -90,6 +90,10 @@ data class Jwk(
     val y: String,
 )
 
+fun Jwk.toCanonicalJson(): String {
+    return """{"crv":"$crv","kty":"$kty","x":"$x","y":"$y"}"""
+}
+
 enum class AsymAlg { ES256 }
 
 fun secureRandom(b: ByteArray): ByteArray {

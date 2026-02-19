@@ -32,6 +32,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.URLProtocol
 import io.ktor.http.charset
 import io.ktor.http.content.OutgoingContent
+import io.ktor.http.encodeURLParameter
 import io.ktor.http.encodedPath
 import io.ktor.utils.io.charsets.Charsets
 import io.ktor.utils.io.core.toByteArray
@@ -39,14 +40,19 @@ import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.text.ifEmpty
 
-private const val CRLF = "\r\n"
-private const val HTTP_VERSION = "HTTP/1.1"
+public interface InnerHttpCodec {
+    public fun encodeRequest(builder: HttpRequestBuilder): ByteArray
+    public fun decodeResponse(bytes: ByteArray): InnerHttpResponse
+}
 
-public class InnerHttpCodec {
+public class InnerHttpCodecImpl : InnerHttpCodec {
+    private val CRLF = "\r\n"
+    private val HTTP_VERSION = "HTTP/1.1"
+
     /**
      * Encode a Ktor HttpRequestBuilder into a raw HTTP/1.1 request:
      */
-    public fun encodeRequest(builder: HttpRequestBuilder): ByteArray {
+    override fun encodeRequest(builder: HttpRequestBuilder): ByteArray {
         val method = builder.method.value
         val requestTarget = buildRequestTarget(builder)
         val (bodyBytes, bodyContentType) = extractBody(builder)
@@ -54,6 +60,7 @@ public class InnerHttpCodec {
         val headerMap: Map<String, List<String>> =
             buildHeaderMap(builder)
                 .withHostHeaderIfMissing(builder)
+                .withForwardedHeaders()
                 .withBodyHeaders(bodyBytes, bodyContentType)
 
         val headBytes = buildHeadBytes(method, requestTarget, headerMap)
@@ -64,7 +71,7 @@ public class InnerHttpCodec {
     /**
      * Decode a raw HTTP/1.1 response into [InnerHttpResponse]
      */
-    public fun decodeResponse(bytes: ByteArray): InnerHttpResponse {
+    override fun decodeResponse(bytes: ByteArray): InnerHttpResponse {
         val (headerBytes, bodyBytes) = splitHeaderAndBody(bytes)
 
         val headerText = headerBytes.decodeToString()
@@ -118,7 +125,15 @@ public class InnerHttpCodec {
         val path = builder.url.encodedPath.ifEmpty { "/" }
         val query = builder.url.parameters
 
-        return if (query.isEmpty()) path else "$path?$query"
+        if (query.isEmpty()) return path
+
+        val queryString = query.entries()
+            .flatMap { (key, values) ->
+                values.map { value -> "${key.encodeURLParameter()}=${value.encodeURLParameter()}" }
+            }
+            .joinToString("&")
+
+        return "$path?$queryString"
     }
 
     private fun buildHeaderMap(builder: HttpRequestBuilder): LinkedHashMap<String, MutableList<String>> {
@@ -150,6 +165,20 @@ public class InnerHttpCodec {
         }
 
         getOrPut(HttpHeaders.Host) { mutableListOf() }.add(hostValue)
+        return this
+    }
+
+    private fun MutableMap<String, MutableList<String>>.withForwardedHeaders(): MutableMap<String, MutableList<String>> {
+        val protoKey = keys.firstOrNull { it.equals(HttpHeaders.XForwardedProto, ignoreCase = true) }
+        if (protoKey != null) {
+            this[protoKey] = mutableListOf("http")
+        }
+
+        val portKey = keys.firstOrNull { it.equals(HttpHeaders.XForwardedPort, ignoreCase = true) }
+        if (portKey != null) {
+            this[portKey] = mutableListOf("80")
+        }
+
         return this
     }
 

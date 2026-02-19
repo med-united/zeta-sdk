@@ -29,7 +29,7 @@ import kotlinx.serialization.json.JsonElement
 
 @Serializable
 data class SoftwarePosture(
-    @SerialName("platform_product_id") val platformProductId: JsonElement,
+    @SerialName("platform_product_id") val platformProductId: PlatformProductId,
     @SerialName("product_id") val productId: String,
     @SerialName("product_version")val productVersion: String,
     /* Operating system name*/
@@ -44,5 +44,68 @@ data class SoftwarePosture(
     @SerialName("attestation_challenge") val attestationChallenge: String,
 )
 
-expect suspend fun buildPosture(productId: String, productVersion: String, attChallenge: String, publicKeyB64: String): JsonElement
+@Serializable
+data class TpmPosture(
+    @SerialName("platform_product_id") val platformProductId: PlatformProductId,
+    @SerialName("product_id") val productId: String,
+    @SerialName("product_version")val productVersion: String,
+    val os: String,
+    @SerialName("os_version") val osVersion: String,
+    val arch: String,
+    @SerialName("tpm_attestation_key") val tpmAttestationKey: String,
+    @SerialName("tpm_quote") val tpmQuote: String,
+    // @SerialName("tpm_quote_signature") val tpmQuoteSignature: String,
+    @SerialName("tpm_event_log") val tpmEventLog: String,
+    @SerialName("tpm_ek_certificate_chain") val tpmEkCertificateChain: List<String>,
+)
+
+@Serializable
+data class ApplePosture(
+    @SerialName("platform_product_id") val platformProductId: PlatformProductId,
+    @SerialName("product_id") val productId: String,
+    @SerialName("product_version")val productVersion: String,
+    @SerialName("system_version") val systemVersion: String,
+    @SerialName("system_name") val systemName: String,
+    @SerialName("device_model") val deviceModel: String,
+    @SerialName("key_id") val keyId: String,
+    @SerialName("fmt") val fmt: String = "apple-appattest",
+    @SerialName("attStmt") val attStmt: AttStmt,
+    @SerialName("authData") val authData: AuthData,
+    @SerialName("signature") val signature: String,
+    @SerialName("assertionAuthenticatorData") val assertionAuthenticatorData: AssertionAuthenticatorData,
+    @SerialName("client_data_json") val clientDataJson: String,
+)
+
+@Serializable
+data class AttStmt(
+    @SerialName("x5c")
+    val x5c: List<String>,
+    @SerialName("receipt")
+    val receipt: String,
+)
+
+@Serializable
+data class AuthData(
+    @SerialName("rpidHash")
+    val rpidHash: String,
+    @SerialName("flags")
+    val flags: String,
+    @SerialName("counter")
+    val counter: Int,
+    @SerialName("aaguid")
+    val aaguid: String,
+    @SerialName("credentialId")
+    val credentialId: String,
+)
+
+@Serializable
+data class AssertionAuthenticatorData(
+    @SerialName("rpidHash")
+    val rpidHash: String,
+    @SerialName("counter")
+    val counter: Int,
+)
+
+expect suspend fun buildPosture(platformProductId: PlatformProductId, productId: String, productVersion: String, attChallenge: String, publicKeyB64: String): JsonElement
 expect suspend fun getPlatform(): Platform
+expect fun getPostureType(): PostureType

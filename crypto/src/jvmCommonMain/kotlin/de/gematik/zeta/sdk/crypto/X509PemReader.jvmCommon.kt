@@ -24,16 +24,12 @@
 
 package de.gematik.zeta.sdk.crypto
 
-import org.bouncycastle.asn1.ASN1ObjectIdentifier
-import org.bouncycastle.asn1.ASN1OctetString
-import org.bouncycastle.asn1.ASN1Primitive
-import org.bouncycastle.asn1.ASN1Sequence
-import org.bouncycastle.asn1.DERPrintableString
-import java.io.ByteArrayInputStream
+import org.bouncycastle.asn1.isismtt.x509.AdmissionSyntax
+import org.bouncycastle.cert.X509CertificateHolder
+import org.bouncycastle.internal.asn1.isismtt.ISISMTTObjectIdentifiers
 import java.io.FileInputStream
 import java.security.KeyStore
 import java.security.PrivateKey
-import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 
 actual class X509PemReader {
@@ -54,32 +50,13 @@ actual class X509PemReader {
     }
 
     actual fun getRegistrationNumber(certificateBytes: ByteArray): String? {
-        val factory = CertificateFactory.getInstance("X.509")
-        val certificate = factory.generateCertificate(ByteArrayInputStream(certificateBytes)) as X509Certificate
-        val ext = certificate.getExtensionValue("1.3.36.8.3.3")
-        val der = ASN1Primitive.fromByteArray((ASN1Primitive.fromByteArray(ext) as ASN1OctetString).octets)
-        val admissionSeq = ASN1Sequence.getInstance(der)
-        return findRegistrationNumberRecursive(admissionSeq, null, "1.2.276.0.76.4.50")
-    }
-
-    private fun findRegistrationNumberRecursive(node: ASN1Sequence, parent: ASN1Sequence?, targetOid: String): String? {
-        val elements = node.objects.toList()
-        val hasTargetOid = elements.any {
-            it is ASN1ObjectIdentifier && it.id == targetOid
-        }
-
-        if (hasTargetOid) {
-            val printable = parent?.objects?.toList().orEmpty().firstOrNull { it is DERPrintableString } as? DERPrintableString
-            if (printable != null) {
-                return printable.string
-            }
-        }
-        for (child in elements) {
-            if (child is ASN1Sequence) {
-                val found = findRegistrationNumberRecursive(child, node, targetOid)
-                if (found != null) return found
-            }
-        }
-        return null
+        val admission = X509CertificateHolder(certificateBytes)
+            .extensions
+            .getExtensionParsedValue(ISISMTTObjectIdentifiers.id_isismtt_at_admission)
+        val registrationNumber = AdmissionSyntax.getInstance(admission)
+            .contentsOfAdmissions[0]
+            .professionInfos[0]
+            .registrationNumber
+        return registrationNumber
     }
 }

@@ -38,6 +38,7 @@ public class ExtendedStorage(private val storage: SdkStorage) {
     companion object {
         private const val HASH_RADIX = 36 // numbers and letters
         private const val HASH_LENGTH = 8 // 36^8
+        private const val HASH_DELIMITER = ";"
     }
     private val json: Json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
@@ -77,7 +78,7 @@ public class ExtendedStorage(private val storage: SdkStorage) {
 
     suspend fun getHashes(hashIndexKey: String) =
         storage.get(hashIndexKey)
-            ?.split(",")
+            ?.split(HASH_DELIMITER)
             ?.filter { it.isNotBlank() }
             ?: emptyList()
 
@@ -85,13 +86,13 @@ public class ExtendedStorage(private val storage: SdkStorage) {
         val shortHash = hash(fqdn)
 
         val map = storage.get(hashIndexKey)
-            ?.split(";")
+            ?.split(HASH_DELIMITER)
             ?.filter { it.isNotBlank() }
             ?.toSet()
             ?: emptySet()
 
         if (!map.contains(shortHash)) {
-            storage.put(hashIndexKey, (map + shortHash).joinToString(";"))
+            storage.put(hashIndexKey, (map + shortHash).joinToString(HASH_DELIMITER))
         }
 
         return shortHash

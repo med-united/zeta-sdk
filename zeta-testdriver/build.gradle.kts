@@ -1,3 +1,4 @@
+import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 import kotlinx.kover.gradle.plugin.dsl.KoverVersions.version
 import org.gradle.api.internal.artifacts.dependencies.DefaultImmutableVersionConstraint.strictly
@@ -8,22 +9,24 @@ plugins {
 }
 
 setupBuildLogic {
-    kotlin {
-        dependencies {
-            implementation(project(":zeta-sdk"))
-            implementation(libs.ktor.client.logging)
-            implementation(libs.ktor.client.websockets)
-            implementation(libs.ktor.client.okhttp)
-            implementation(libs.ktor.server.core.jvm)
-            implementation(libs.ktor.server.netty.jvm)
-            implementation(libs.ktor.server.logging.jvm)
-            implementation(libs.ktor.server.cors.jvm)
-            implementation(libs.ktor.server.websockets.jvm)
+    if (project.isJvmEnabled) {
+        kotlin {
+            dependencies {
+                implementation(project(":zeta-sdk"))
+                implementation(libs.ktor.client.logging)
+                implementation(libs.ktor.client.websockets)
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.ktor.server.core.jvm)
+                implementation(libs.ktor.server.netty.jvm)
+                implementation(libs.ktor.server.logging.jvm)
+                implementation(libs.ktor.server.cors.jvm)
+                implementation(libs.ktor.server.websockets.jvm)
+            }
         }
-    }
 
-    dependencies {
-        api(project(":zeta-sdk"))
+        dependencies {
+            api(project(":zeta-sdk"))
+        }
     }
 }
 

@@ -26,6 +26,8 @@ dependencies {
     kover(project(":zeta-client-java"))
     kover(project(":zeta-sdk"))
     kover(project(":zeta-testdriver"))
+    kover(project(":asl"))
+    kover(project(":crypto"))
 }
 
 sonar {
@@ -42,6 +44,7 @@ sonar {
         // mandatory for monorepos
         property("sonar.projectKey", "zeta_zeta-client_zeta-sdk_5b6b9b82-d91d-4748-afaa-3f5bcbfb0d8a")
         property("sonar.projectName", "zeta-sdk")
+        property("sonar.exclusions", "**/attestation-service/**")
         //property("sonar.coverage.jacoco.xmlReportPaths", jacocoPaths)
         property("sonar.coverage.jacoco.xmlReportPaths", "$rootDir/build/reports/kover/report.xml")
         property("sonar.dependencyCheck.jsonReportPath","$rootDir/build/reports/dependency-check-report.json")

@@ -25,10 +25,10 @@ package de.gematik.zeta;
 
 import de.gematik.zeta.logging.Log;
 import de.gematik.zeta.sdk.*;
+import de.gematik.zeta.sdk.attestation.model.AttestationConfig;
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId;
 import de.gematik.zeta.sdk.authentication.AuthConfig;
 import de.gematik.zeta.sdk.authentication.SubjectTokenProvider;
-import de.gematik.zeta.sdk.attestation.model.ClientSelfAssessment;
 import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider;
 import de.gematik.zeta.sdk.authentication.smcb.ConnectorApiImpl;
 import de.gematik.zeta.sdk.authentication.smcb.SmcbTokenProvider;
@@ -46,12 +46,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.StringTokenizer;
+import java.util.concurrent.CompletableFuture;
 import static de.gematik.zeta.sdk.WsClientExtensionKt.stompConnectFrame;
 import static de.gematik.zeta.sdk.WsClientExtensionKt.stompSendFrame;
 import static de.gematik.zeta.sdk.WsClientExtensionKt.stompSubscribeFrame;
 
 public class Main {
-
     public static final String SMB_KEYSTORE_FILE = "SMB_KEYSTORE_FILE";
     public static final String SMB_KEYSTORE_ALIAS = "SMB_KEYSTORE_ALIAS";
     public static final String SMB_KEYSTORE_PASSWORD = "SMB_KEYSTORE_PASSWORD";
@@ -108,9 +108,10 @@ public class Main {
                     ),
                     30,
                     aslProdEnv,
-                    getTokenProvider(props)
+                    getTokenProvider(props),
+                    AttestationConfig.software()
                 ),
-                new ClientSelfAssessment("name", "clientId", "manufacturerId", "manufacturerName", "test@manufacturertestmail.de", 0, new PlatformProductId.AppleProductId("apple","macos", List.of("bundleX"))),
+                new PlatformProductId.AppleProductId("apple","macos", List.of("bundleX")),
                 new ZetaHttpClientBuilder("").disableServerValidation(disableServerValidation).logging(LogLevel.ALL, System.out::println),
                 null,
                 null
@@ -251,29 +252,101 @@ public class Main {
         }
         return props;
     }
-
-    private static void testWebSocketConnection(ZetaSdkClient sdkClient, Properties props, Map<String, String> headers) {
+    public static void testWebSocketConnection(ZetaSdkClient sdkClient, Properties props, Map<String, String> headers) {
         String baseUrl = getFirstResourceUrl(props);
-        String contextPath = getArg(props, WS_SERVER_CONTEXT_PATH);
-        String wsUrl = baseUrl.replace("https://", "wss://").replace("http://", "ws://") + "/ws";
+        String wsUrl = toWsUrl(baseUrl, "/ws");
         String host = extractHost(baseUrl);
+        String contextPath = requiredArg(props, WS_SERVER_CONTEXT_PATH);
+        boolean disableServerValidation = "true".equalsIgnoreCase(getArg(props, DISABLE_SERVER_VALIDATION));
 
-        try {
-            WsClientExtension.ws(sdkClient, wsUrl,
+        WsClientAsyncExtension.wsAsync(
+                sdkClient,
+                wsUrl,
                 builder -> {
-                    builder.disableServerValidation("true".
-                        equalsIgnoreCase(getArg(props, DISABLE_SERVER_VALIDATION)));
+                    builder.disableServerValidation(disableServerValidation);
+                    builder.logging(LogLevel.ALL, System.out::println);
                     return Unit.INSTANCE;
                 },
-                headers, session -> {
-                connectAndSubscribe(session, host, contextPath);
-                sendPrescriptionCommands(session, contextPath);
-                receiveMessages(session);
-                session.close();
+                headers,
+                session -> connectAndSubscribe(session, host, contextPath)
+                    .thenCompose(v -> sendPrescriptionCommands(session, contextPath))
+                    .thenCompose(v -> session.onMessageAsync(new WsClientAsyncExtension.WsAsyncSession.WsMessageListener() {
+                        @Override
+                        public void onBinary(byte[] bytes) {
+                            Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "Received binary frame (" + bytes.length + " bytes)");
+                        }
+
+                        @Override
+                        public void onText(String text) {
+                            if (text.startsWith("CONNECTED")) {
+                                Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "CONNECTED:\n" + text);
+                            } else {
+                                Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "Message:\n" + text);
+                            }
+                        }
+
+                        @Override
+                        public void onClose() {
+                            Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "WebSocket closed");
+                        }
+
+                        @Override
+                        public void onError(Throwable error) {
+                            Log.INSTANCE.e(error, WEBSOCKETS_TAG, () -> "WebSocket error");
+                        }
+                    }))
+            ).thenRun(() -> Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "WebSocket finished"))
+            .exceptionally(ex -> {
+                Log.INSTANCE.e(ex, WEBSOCKETS_TAG, () -> "WebSocket failed");
+                return null;
+            })
+            .join();
+    }
+
+    private static CompletableFuture<Unit> connectAndSubscribe(
+        WsClientAsyncExtension.WsAsyncSession session,
+        String host,
+        String contextPath
+    ) {
+        return session.sendTextAsync(stompConnectFrame(host))
+            .thenCompose(v -> session.sendTextAsync(stompSubscribeFrame("sub-1", contextPath + "/topic/erezept")))
+            .thenCompose(v -> session.sendTextAsync(stompSubscribeFrame("sub-2", contextPath + "/user/queue/erezept")))
+            .thenApply(v -> {
+                Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "Connected + subscribed");
+                return Unit.INSTANCE;
             });
-        } catch (Exception ex) {
-            Log.INSTANCE.e(ex, WEBSOCKETS_TAG, () -> "Websocket failed");
-        }
+    }
+
+    private static CompletableFuture<Unit> sendPrescriptionCommands(
+        WsClientAsyncExtension.WsAsyncSession session,
+        String contextPath
+    ) {
+        String createBody = """
+            {
+              "prescriptionId": "RX-2025-100123",
+              "patientId": "PAT-123456",
+              "practitionerId": "PRAC-98765",
+              "medicationName": "Ibuprofen 400 mg",
+              "dosage": "1",
+              "issuedAt": "2025-09-22T10:30:00Z",
+              "expiresAt": "2025-12-31T23:59:59Z",
+              "status": "CREATED"
+            }
+            """.trim();
+
+        return session.sendTextAsync(stompSendFrame(contextPath + "/app/erezept.create", createBody))
+            .thenCompose(v -> session.sendTextAsync(stompSendFrame(contextPath + "/app/erezept.read.1", "{}")))
+            .thenApply(v -> {
+                Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "Commands sent");
+                return Unit.INSTANCE;
+            });
+    }
+
+    private static String toWsUrl(String baseUrl, String path) {
+        String wsBase = baseUrl
+            .replace("https://", "wss://")
+            .replace("http://", "ws://");
+        return wsBase + (path.startsWith("/") ? path : "/" + path);
     }
 
     private static String extractHost(String url) {
@@ -284,49 +357,10 @@ public class Main {
         }
     }
 
-    private static void connectAndSubscribe(WsClientExtension.WsSession session, String host, String contextPath) {
-        session.sendText(stompConnectFrame(host));
-
-        WsClientExtension.WsMessage msg = session.receiveNext();
-        if (msg instanceof WsClientExtension.WsMessage.Text textMsg) {
-            Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "CONNECTED frame:\n" + textMsg.getText());
-        }
-
-        session.sendText(stompSubscribeFrame("sub-1", contextPath + "/topic/erezept"));
-        session.sendText(stompSubscribeFrame("sub-2", contextPath + "/user/queue/erezept"));
-    }
-
-    private static void sendPrescriptionCommands(WsClientExtension.WsSession session, String contextPath) {
-        String createBody = """
-    {
-      "prescriptionId": "RX-2025-100123",
-      "patientId": "PAT-123456",
-      "practitionerId": "PRAC-98765",
-      "medicationName": "Ibuprofen 400 mg",
-      "dosage": "1",
-      "issuedAt": "2025-09-22T10:30:00Z",
-      "expiresAt": "2025-12-31T23:59:59Z",
-      "status": "CREATED"
-    }
-    """.trim();
-
-        session.sendText(stompSendFrame(contextPath + "/app/erezept.create", createBody));
-        session.sendText(stompSendFrame(contextPath + "/app/erezept.read.1", "{}"));
-    }
-
-    private static void receiveMessages(WsClientExtension.WsSession session) {
-        for (int i = 0; i < 10; i++) {
-            WsClientExtension.WsMessage incoming = session.receiveNext();
-            if (incoming == null || incoming instanceof WsClientExtension.WsMessage.Close) {
-                Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "WebSocket closed.");
-                break;
-            }
-            if (incoming instanceof WsClientExtension.WsMessage.Text text) {
-                Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "Received: " + text.getText());
-            } else if (incoming instanceof WsClientExtension.WsMessage.Binary bin) {
-                Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "Received " + bin.getBytes().length + " bytes (binary)");
-            }
-        }
+    private static String requiredArg(Properties props, String name) {
+        String v = getArg(props, name);
+        if (v == null || v.isBlank()) throw new IllegalStateException("Missing required config: " + name);
+        return v;
     }
 }
 

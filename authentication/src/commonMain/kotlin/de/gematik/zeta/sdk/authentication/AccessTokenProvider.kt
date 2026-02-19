@@ -24,9 +24,10 @@
 
 package de.gematik.zeta.sdk.authentication
 
+import AttestationApi
 import AttestationApiImpl
 import de.gematik.zeta.logging.Log
-import de.gematik.zeta.sdk.attestation.model.ClientSelfAssessment
+import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.model.AccessTokenRequest
 import de.gematik.zeta.sdk.authentication.model.DPoPTokenClaims
 import de.gematik.zeta.sdk.authentication.model.DPopTokenHeader
@@ -34,7 +35,6 @@ import de.gematik.zeta.sdk.authentication.model.TokenType
 import de.gematik.zeta.sdk.crypto.hashWithSha256
 import de.gematik.zeta.sdk.tpm.TpmProvider
 import io.ktor.utils.io.core.toByteArray
-import kotlinx.coroutines.delay
 import kotlin.io.encoding.Base64
 import kotlin.time.Clock.System
 
@@ -45,7 +45,7 @@ data class AccessTokenParams(
     val expiration: Long,
     val scopes: List<String>,
     val audience: String,
-    val clientSelfAssessment: ClientSelfAssessment,
+    val platformProductId: PlatformProductId,
 )
 
 interface AccessTokenProvider {
@@ -63,6 +63,14 @@ class AccessTokenProviderImpl(
     private val clock: () -> Long = { System.now().epochSeconds },
     private val tpmProvider: TpmProvider,
 ) : AccessTokenProvider {
+
+    private val attestationApi: AttestationApi by lazy {
+        AttestationApiImpl(
+            tpmProvider = tpmProvider,
+            attestationConfig = authConfig.attestation,
+        )
+    }
+
     override suspend fun getValidToken(tokenEndpoint: String, nonceEndpoint: String, params: AccessTokenParams): String {
         val cached = authStorage.getAccessToken(resource)
         val exp = authStorage.getTokenExpiration(resource)
@@ -89,7 +97,8 @@ class AccessTokenProviderImpl(
     private suspend fun refreshToken(tokenEndpoint: String, nonceEndpoint: String, params: AccessTokenParams, refreshToken: String): String {
         require(refreshToken.isNotBlank())
 
-        return requestAccessToken("refresh_token", tokenEndpoint, nonceEndpoint, params, refreshToken)
+        val nonce = authApi.fetchNonce(nonceEndpoint)
+        return requestAccessToken("refresh_token", tokenEndpoint, nonce, params, refreshToken)
     }
 
     private suspend fun issueNewAccessToken(
@@ -100,7 +109,6 @@ class AccessTokenProviderImpl(
         val nonce = authApi.fetchNonce(nonceEndpoint)
         Log.d { "issueNewAccessToken: nonce = $nonce" }
 
-        // Self-made access token (SM(C)-B) to be signed/hashed externally
         val subjectToken = suspend {
             authConfig.subjectTokenProvider.createSubjectToken(
                 params.clientId,
@@ -115,8 +123,8 @@ class AccessTokenProviderImpl(
         return requestAccessToken(
             grantType = "urn:ietf:params:oauth:grant-type:token-exchange",
             tokenEndpoint = tokenEndpoint,
-            nonceEndpoint = nonceEndpoint,
-            params,
+            nonce = nonce,
+            params = params,
             subjectToken = subjectToken,
             subjectTokenType = "urn:ietf:params:oauth:token-type:jwt",
         )
@@ -125,67 +133,53 @@ class AccessTokenProviderImpl(
     private suspend fun requestAccessToken(
         grantType: String,
         tokenEndpoint: String,
-        nonceEndpoint: String,
+        nonce: ByteArray,
         params: AccessTokenParams,
         refreshToken: String? = null,
         subjectToken: suspend () -> String? = { null },
         subjectTokenType: String? = null,
-        maxRetries: Int = 1,
     ): String {
-        var lastException: AuthenticationException? = null
+        try {
+            val clientAssertion = attestationApi.createClientAssertion(
+                params.productId,
+                params.productVersion,
+                nonce,
+                params.clientId,
+                clock() + params.expiration,
+                tokenEndpoint,
+                params.platformProductId,
+            )
 
-        repeat(maxRetries + 1) { attempt ->
-            try {
-                val nonce = authApi.fetchNonce(nonceEndpoint)
+            val dpop = createDpopToken("POST", tokenEndpoint, nonce)
 
-                val clientAssertion = AttestationApiImpl(tpmProvider).createClientAssertion(
-                    params.productId,
-                    params.productVersion,
-                    nonce,
-                    params.clientId,
-                    clock() + params.expiration,
-                    tokenEndpoint,
-                    params.clientSelfAssessment,
-                )
+            val request = AccessTokenRequest(
+                grantType = grantType,
+                clientId = params.clientId,
+                requestedTokenType = "urn:ietf:params:oauth:token-type:refresh_token",
+                clientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                clientAssertion = clientAssertion,
+                scope = params.scopes.joinToString(" "),
+                refreshToken = refreshToken,
+                subjectToken = subjectToken(),
+                subjectTokenType = subjectTokenType,
+            )
 
-                val dpop = createDpopToken("POST", tokenEndpoint, nonce)
+            val resp = authApi.requestAccessToken(tokenEndpoint, request, dpop)
 
-                val request = AccessTokenRequest(
-                    grantType = grantType,
-                    clientId = params.clientId,
-                    requestedTokenType = "urn:ietf:params:oauth:token-type:refresh_token",
-                    clientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-                    clientAssertion = clientAssertion,
-                    scope = params.scopes.joinToString(" "),
-                    refreshToken = refreshToken,
-                    subjectToken = subjectToken(),
-                    subjectTokenType = subjectTokenType,
-                )
+            authStorage.saveAccessTokens(resource, resp.accessToken, resp.refreshToken, clock() + resp.expiresIn)
 
-                val resp = authApi.requestAccessToken(tokenEndpoint, request, dpop)
-
-                authStorage.saveAccessTokens(resource, resp.accessToken, resp.refreshToken, clock() + resp.expiresIn)
-
-                return resp.accessToken
-            } catch (e: RecoverableAuthenticationException) {
-                Log.w { "Recoverable auth error on attempt $attempt: ${e.message}" }
-                lastException = e
-                if (attempt < maxRetries) {
-                    delay(1000L * (attempt + 1))
-                }
-            } catch (e: NonRecoverableAuthenticationException) {
-                Log.w { "Non recoverable auth error on attempt $attempt: ${e.message}" }
-                throw e
-            }
+            return resp.accessToken
+        } catch (e: AuthenticationException) {
+            Log.w { "Auth error: ${e.message}" }
+            throw e
         }
-        throw lastException ?: error("Request access token: unexpected error occurred")
     }
 
     override suspend fun createDpopToken(method: String, url: String, nonceBytes: ByteArray?, accessTokenHash: String?): String {
         val dpopKey = tpmProvider.generateDpopKey()
         val now = clock()
         val jti = tpmProvider.randomUuid().toHexDashString()
-        val htu = removeUrlQueryParams(url)
+        val htu = url.applyHtuRules()
         val nonce = nonceBytes?.let { Base64.encode(nonceBytes) }
 
         val token = AccessTokenUtility.create(
@@ -221,11 +215,22 @@ class AccessTokenProviderImpl(
         return Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).encode(signature)
     }
 
-    fun removeUrlQueryParams(url: String): String {
-        return url.substringBefore('?').substringBefore('#')
-    }
-
     companion object {
         private const val SAFETY_MARGIN_SECS = 10
+
+        fun String.applyHtuRules(): String {
+            return this.substringBefore('?')
+                .substringBefore('#')
+                .toHttpsForWsDpop()
+        }
+
+        fun String.toHttpsForWsDpop(): String {
+            return this.replace("wss://", "https://")
+                .replace("ws://", "http://")
+        }
+
+        fun String.toHttpForAslInnerRequestDpop(): String {
+            return this.replace("https://", "http://")
+        }
     }
 }

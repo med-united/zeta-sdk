@@ -40,7 +40,17 @@ actual suspend fun getPlatform(): Platform {
     }
 }
 
+actual fun getPostureType(): PostureType {
+    when (platform()) {
+        is de.gematik.zeta.platform.Platform.Native.Macos -> return PostureType.APPLE
+        is de.gematik.zeta.platform.Platform.Native.Linux -> return PostureType.TPM
+        is de.gematik.zeta.platform.Platform.Native.Windows -> return PostureType.TPM
+        else -> error("unknown platform")
+    }
+}
+
 actual suspend fun buildPosture(
+    platformProductId: PlatformProductId,
     productId: String,
     productVersion: String,
     attChallenge: String,
@@ -48,12 +58,37 @@ actual suspend fun buildPosture(
 ): JsonElement {
     Log.d { "Building posture. Getting platform information" }
     val platformInfo = getPlatformInfo()
+    val json = Json {
+        encodeDefaults = true
+    }
 
-    return Json.encodeToJsonElement(
+    val platform = getPlatform()
+    if (platform == Platform.APPLE) {
+        return json.encodeToJsonElement(
+            ApplePosture.serializer(),
+            ApplePosture(
+                productId = productId,
+                productVersion = productVersion,
+                platformProductId = platformProductId,
+                systemVersion = platformInfo.osVersion,
+                systemName = platformInfo.os,
+                deviceModel = "deviceModel",
+                keyId = "keyId",
+                fmt = "apple-appattest",
+                attStmt = AttStmt(emptyList(), ""),
+                authData = AuthData("", "", 1, "", ""),
+                signature = "signature",
+                assertionAuthenticatorData = AssertionAuthenticatorData("", 1),
+                clientDataJson = "clientDataJson",
+            ),
+        )
+    }
+
+    return json.encodeToJsonElement(
         SoftwarePosture(
             productId = productId,
             productVersion = productVersion,
-            platformProductId = platformProductId(),
+            platformProductId = platformProductId,
             os = platformInfo.os,
             osVersion = platformInfo.osVersion,
             arch = platformInfo.arch,

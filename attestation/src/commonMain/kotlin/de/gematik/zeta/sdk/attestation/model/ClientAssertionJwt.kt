@@ -37,6 +37,7 @@ import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonContentPolymorphicSerializer
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
@@ -62,10 +63,14 @@ data class ClientAssertionJwt(
         val exp: Long, // epoch seconds
         val jti: String, // unique id
 
+        @Transient
+        val attestationType: AttestationType = AttestationType.SOFTWARE,
+
         @SerialName("client_statement")
-        val clientStatement: JsonElement? = null,
-        /** The client instance */
-        @SerialName("urn:telematik:client-self-assessment") val clientSelfAssessment: ClientSelfAssessment,
+        val clientStatement: ClientStatement,
+
+        @SerialName("urn:telematik:client-self-assessment")
+        val clientSelfAssessment: ClientSelfAssessment,
     ) {
         init {
             require(iss.isNotEmpty()) { "Payload iss must be not blank" }

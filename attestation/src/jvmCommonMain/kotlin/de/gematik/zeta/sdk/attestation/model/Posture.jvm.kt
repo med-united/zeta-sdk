@@ -32,6 +32,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
 actual suspend fun buildPosture(
+    platformProductId: PlatformProductId,
     productId: String,
     productVersion: String,
     attChallenge: String,
@@ -39,12 +40,37 @@ actual suspend fun buildPosture(
 ): JsonElement {
     Log.d { "Building posture. Getting platform information" }
     val platformInfo = getPlatformInfo()
+    val json = Json {
+        encodeDefaults = true
+    }
 
-    return Json.encodeToJsonElement(
+    val platform = getPlatform()
+    if (platform == Platform.APPLE) {
+        return json.encodeToJsonElement(
+            ApplePosture.serializer(),
+            ApplePosture(
+                productId = productId,
+                productVersion = productVersion,
+                platformProductId = platformProductId,
+                systemVersion = platformInfo.osVersion,
+                systemName = platformInfo.os,
+                deviceModel = "deviceModel",
+                keyId = "keyId",
+                fmt = "apple-appattest",
+                attStmt = AttStmt(emptyList(), ""),
+                authData = AuthData("", "", 1, "", ""),
+                signature = "signature",
+                assertionAuthenticatorData = AssertionAuthenticatorData("", 1),
+                clientDataJson = "clientDataJson",
+            ),
+        )
+    }
+
+    return json.encodeToJsonElement(
         SoftwarePosture(
             productId = productId,
             productVersion = productVersion,
-            platformProductId = platformProductId(),
+            platformProductId = platformProductId,
             os = platformInfo.os,
             osVersion = platformInfo.osVersion,
             arch = platformInfo.arch,
@@ -59,9 +85,17 @@ actual suspend fun getPlatform(): Platform {
         is de.gematik.zeta.platform.Platform.Jvm.Macos -> return Platform.APPLE
         is de.gematik.zeta.platform.Platform.Jvm.Linux -> return Platform.LINUX
         is de.gematik.zeta.platform.Platform.Jvm.Windows -> return Platform.WINDOWS
+        is de.gematik.zeta.platform.Platform.Android -> return Platform.ANDROID
         else -> error("Unknown platform: $plat")
     }
 }
 
-// TODO
-fun platformProductId(): JsonElement = Json.encodeToJsonElement("")
+actual fun getPostureType(): PostureType {
+    when (val plat = platform()) {
+        is de.gematik.zeta.platform.Platform.Jvm.Macos -> return PostureType.APPLE
+        is de.gematik.zeta.platform.Platform.Jvm.Linux -> return PostureType.SOFTWARE
+        is de.gematik.zeta.platform.Platform.Jvm.Windows -> return PostureType.SOFTWARE
+        is de.gematik.zeta.platform.Platform.Android -> return PostureType.ANDROID
+        else -> error("Unknown platform: $plat")
+    }
+}

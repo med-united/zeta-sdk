@@ -39,7 +39,7 @@ public fun main(args: Array<String>) {
     application {
         Window(
             onCloseRequest = ::exitApplication,
-            title = "Zero Trust",
+            title = "Zero Trust (JVM)",
             state = rememberWindowState(
                 position = WindowPosition(alignment = Alignment.Center),
             ),

@@ -1,3 +1,4 @@
+import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 import org.jetbrains.kotlin.gradle.dsl.ExplicitApiMode
 
@@ -22,9 +23,11 @@ setupBuildLogic {
             implementation("com.russhwolf:multiplatform-settings:1.3.0")
         }
 
-        sourceSets.jvmMain.dependencies {
-            implementation("com.russhwolf:multiplatform-settings-jvm:1.3.0")
-            implementation(libs.java.keyring)
+        if (project.isJvmEnabled) {
+            sourceSets.jvmMain.dependencies {
+                implementation("com.russhwolf:multiplatform-settings-jvm:1.3.0")
+                implementation(libs.java.keyring)
+            }
         }
 
         sourceSets.commonTest.dependencies {

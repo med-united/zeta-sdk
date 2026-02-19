@@ -56,6 +56,8 @@ workflow:
     - if: '$CI_COMMIT_BRANCH == "develop"'
     - if: '$CI_COMMIT_BRANCH == "staging"'
     - if: '$CI_COMMIT_BRANCH == "release"'
+    # auto-build for tags
+    - if: $CI_COMMIT_TAG != null
     - when: never
 
 default:
@@ -80,6 +82,7 @@ stages:
   - publish
   - image_build
   - container_scan
+  - report
 
 # define the release version variable, that determines the tag in the repositories
 # this is included (referenced) in the various build stages/jobs
@@ -131,6 +134,17 @@ stages:
   rules:
     - !reference [ .variables_template, rules]
     - when: on_success
+
+.sonar_template: &sonar_template
+  extends: .variables_template
+  variables:
+    SONAR_QUALITY_GATE_ENABLED: !reference [ .variables_template, variables, SONAR_QUALITY_GATE_ENABLED ]
+    RELEASE_VERSION: !reference [ .variables_template, variables, RELEASE_VERSION ]
+    GIT_DEPTH: 0
+  rules:
+    - !reference [ .variables_template, rules ]
+    - when: on_success
+
 
 ########################################################################
 # gradle jobs
@@ -191,7 +205,7 @@ detekt:
       - "**/detekt.html"
       - "**/detekt.xml"
 sonar:
-  <<: *gradle_template
+  <<: *sonar_template
   stage: testAndAnalysis
   needs:
     - job: test
@@ -203,7 +217,6 @@ sonar:
     - job: dependency-check-gradle
       artifacts: true
       optional: true
-
   script:
     # store in .m2 for sonar/kover to pick up for Java client
     - ./gradlew publishJvmPublicationToMavenLocal publishKotlinMultiplatformPublicationToMavenLocal
@@ -254,13 +267,13 @@ publish:
     - build
 
 publish_artifacts:
-  stage: publish
+  stage: report
   rules:
     - if: $CI_COMMIT_TAG
       variables:
         COMMIT_MESSAGE: "$CI_COMMIT_TAG"
         COMMIT_TAG: "tag-$CI_COMMIT_TAG-$CI_COMMIT_SHORT_SHA"
-      when: on_success
+      when: always
     - if: $CI_COMMIT_BRANCH == "staging"
       variables:
         COMMIT_MESSAGE: "staging $CI_COMMIT_SHORT_SHA"
@@ -284,14 +297,24 @@ publish_artifacts:
       optional: true
     - job: sbom
       artifacts: true
+    - job: container_scan
+      artifacts: true
   script:
     - git clone https://zeta-sdk:${REPORTING_TOKEN}@${CI_SERVER_FQDN}/zeta/reporting.git
     - mkdir -p ./reporting/zeta-sdk/
+    # unit test coverage
     - find . -path ./reporting -prune -o -name 'report.xml' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
+    - find . -path ./reporting -prune -o -name 'coverage.txt' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
+    # lint report
     - find . -path ./reporting -prune -o -name 'ktlint.xml' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
     - find . -path ./reporting -prune -o -name 'lint-results-debug.xml' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
+    # detekt report
     - find . -path ./reporting -prune -o -name 'detekt.xml' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
+    # SBOM
     - find . -path ./reporting -prune -o -name 'bom.json' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
+    - find . -path ./reporting -prune -o -name 'bom.xml' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
+    # Container scan
+    - find . -path ./reporting -prune -o -name 'gl-container-scanning-report.json' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
     - cd reporting
     - git config user.email "ci@${CI_SERVER_FQDN}"
     - git config  user.name "ci"
@@ -313,7 +336,6 @@ publish_artifacts:
   parallel:
     matrix:
       - PLATFORM: ["testdriver"]
-
 
 build-image:
   <<: *image_template
@@ -404,7 +426,7 @@ container_scan:
     # Prints full report
     - time trivy image --exit-code 0 "$FULL_IMAGE_NAME"
     # Fail on medium to critical vulnerabilities
-    - time trivy image --exit-code 1 --severity "UNKNOWN,MEDIUM,HIGH,CRITICAL" "$FULL_IMAGE_NAME"
+    - time trivy image --exit-code 1 --severity "$SEVERITIES" "$FULL_IMAGE_NAME"
   stage: container_scan
   variables:
     GIT_STRATEGY: "none"
@@ -414,7 +436,11 @@ container_scan:
     TRIVY_NO_PROGRESS: "true"
     TRIVY_CACHE_DIR: ".trivycache/"
     FULL_IMAGE_NAME: $CI_REGISTRY/zeta/zeta-client/zeta-sdk/$PLATFORM-image:$RELEASE_VERSION-$CI_COMMIT_SHORT_SHA
+    # default, esp, when merging to main, fail on these severities.
+    # May still pass if allow_failure set to true (only when merging to develop)
+    SEVERITIES: "UNKNOWN,MEDIUM,HIGH,CRITICAL"
   rules:
+    # when merging to develop, only warn on trivy failures (for MEDIUM and up)
     - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop" && $RELEASE_VERSION_WEB == "latest"
       variables:
         SONAR_QUALITY_GATE_ENABLED: "false"
@@ -425,4 +451,13 @@ container_scan:
         SONAR_QUALITY_GATE_ENABLED: "false"
         RELEASE_VERSION: "develop"
       allow_failure: true
+    # when merging to staging, still allow medium, but hard fail on anything above
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging" && $RELEASE_VERSION_WEB == "latest"
+      variables:
+        RELEASE_VERSION: "staging-mr-$CI_COMMIT_SHORT_SHA"
+        SEVERITIES: "UNKNOWN,HIGH,CRITICAL"
+    - if: $CI_COMMIT_BRANCH == "staging" && $RELEASE_VERSION_WEB == "latest"
+      variables:
+        RELEASE_VERSION: "staging"
+        SEVERITIES: "UNKNOWN,HIGH,CRITICAL"
     - !reference [ .image_template, rules]

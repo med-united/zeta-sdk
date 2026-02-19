@@ -1,4 +1,6 @@
 import com.ensody.nativebuilds.cinterops
+import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
+import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
 import de.gematik.zeta.sdk.buildlogic.isNativeEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 import org.jetbrains.kotlin.gradle.dsl.ExplicitApiMode
@@ -25,9 +27,12 @@ setupBuildLogic {
             implementation(libs.cryptography.core)
         }
 
-        sourceSets["jvmCommonMain"].dependencies {
-            api(libs.bcprov.jdk18on)
-            implementation(libs.cryptography.provider.jdk)
+        if (project.isJvmEnabled) {
+            sourceSets["jvmCommonMain"].dependencies {
+                api(libs.bcprov.jdk18on)
+                api(libs.bcpkix.jdk18on)
+                implementation(libs.cryptography.provider.jdk)
+            }
         }
 
         if (project.isNativeEnabled) {

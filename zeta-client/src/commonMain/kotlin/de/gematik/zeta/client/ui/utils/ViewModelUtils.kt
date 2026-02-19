@@ -29,7 +29,6 @@ import androidx.compose.runtime.State
 import com.ensody.reactivestate.ExperimentalReactiveStateApi
 import com.ensody.reactivestate.ReactiveStateContext
 import com.ensody.reactivestate.ReactiveViewModel
-import com.ensody.reactivestate.compose.reactiveViewModel
 
 @OptIn(ExperimentalReactiveStateApi::class)
 @Composable

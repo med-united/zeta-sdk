@@ -56,7 +56,7 @@ public class AslApiImpl(
     override suspend fun encrypt(request: HttpRequestBuilder): HttpRequestBuilder {
         val session = ensureHandshake(request)
 
-        val innerHttp = InnerHttpCodec().encodeRequest(request)
+        val innerHttp = InnerHttpCodecImpl().encodeRequest(request)
         val extended = session.encryptRequest(innerHttp)
         val bearerHeader = request.headers[HttpHeaders.Authorization]
 

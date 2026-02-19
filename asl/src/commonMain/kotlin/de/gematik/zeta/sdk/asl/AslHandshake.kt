@@ -24,7 +24,6 @@
 
 package de.gematik.zeta.sdk.asl
 
-import de.gematik.zeta.sdk.asl.Environment
 import de.gematik.zeta.sdk.asl.vau.buildMessage1
 import de.gematik.zeta.sdk.asl.vau.buildMessage3
 import de.gematik.zeta.sdk.asl.vau.computeTranscriptHash

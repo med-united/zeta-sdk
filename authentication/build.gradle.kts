@@ -1,3 +1,4 @@
+import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 import org.jetbrains.kotlin.gradle.dsl.ExplicitApiMode
 
@@ -25,8 +26,10 @@ setupBuildLogic {
             implementation(libs.ktor.client.mock)
         }
 
-        sourceSets.jvmTest.dependencies {
-            implementation(libs.mockk)
+        if (project.isJvmEnabled) {
+            sourceSets.jvmTest.dependencies {
+                implementation(libs.mockk)
+            }
         }
     }
 }

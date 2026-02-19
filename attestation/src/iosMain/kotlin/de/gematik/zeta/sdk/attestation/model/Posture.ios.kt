@@ -27,6 +27,7 @@ package de.gematik.zeta.sdk.attestation.model
 import kotlinx.serialization.json.JsonElement
 
 actual suspend fun buildPosture(
+    platformProductId: PlatformProductId,
     productId: String,
     productVersion: String,
     attChallenge: String,
@@ -36,3 +37,4 @@ actual suspend fun buildPosture(
 }
 
 actual suspend fun getPlatform(): Platform = Platform.APPLE
+actual fun getPostureType(): PostureType = PostureType.APPLE

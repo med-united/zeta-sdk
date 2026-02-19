@@ -1,0 +1,8 @@
+headers = tss2/tss2_esys.h tss2/tss2_mu.h tss2/tss2_tctildr.h tss2/tss2_tcti_device.h tss2/tss2_tcti_mssim.h tss2/tss2_rc.h
+headerFilter = tss2/*
+
+staticLibraries = libtss2-esys.a libtss2-mu.a libtss2-sys.a libtss2-tctildr.a libtss2-tcti-device.a libtss2-tcti-mssim.a libtss2-rc.a
+libraryPaths = src/linuxMain/libs/tpm2-tss/x86_64
+
+compilerOpts = -I src/linuxMain/libs/tpm2-tss/include
+linkerOpts = -L/usr/lib/x86_64-linux-gnu -lcrypto -ldl -lpthread --allow-shlib-undefined

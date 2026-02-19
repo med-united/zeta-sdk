@@ -39,6 +39,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -49,20 +51,26 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ensody.reactivestate.ExperimentalReactiveStateApi
 import de.gematik.zeta.client.model.PrescriptionModel
+import de.gematik.zeta.client.state.AttestationState
 import de.gematik.zeta.client.ui.common.ErrorMessage
 import de.gematik.zeta.client.ui.common.LoadingIndicator
 import de.gematik.zeta.client.ui.common.mvi.MviState
 import de.gematik.zeta.client.ui.prescription.add.AddPrescriptionComponent
 import de.gematik.zeta.client.ui.prescription.edit.EditPrescriptionComponent
 import de.gematik.zeta.client.ui.utils.buildViewModel
+import de.gematik.zeta.sdk.attestation.model.AttestationStatus
 
 @OptIn(ExperimentalReactiveStateApi::class)
 @Composable
 public fun PrescriptionListComponent() {
+    val attestationStatus = AttestationState.status
+    val isEnabled = AttestationState.isEnabled
+
     val viewModel by buildViewModel {
         PrescriptionListViewModel(scope)
     }
@@ -79,6 +87,8 @@ public fun PrescriptionListComponent() {
     Column(
         modifier = Modifier.fillMaxSize(),
     ) {
+        attestationStatus?.let { AttestationBanner(it) }
+
         Row(modifier = Modifier.padding(horizontal = 8.dp)) {
             Button(onClick = viewModel::loadPrescriptionList) {
                 Text("Load")
@@ -86,6 +96,7 @@ public fun PrescriptionListComponent() {
             Spacer(modifier = Modifier.width(8.dp))
             Button(
                 onClick = { showAddPrescription = !showAddPrescription },
+                enabled = isEnabled,
             ) {
                 Text("Add")
             }
@@ -209,11 +220,51 @@ public fun PrescriptionListItem(
 }
 
 @Composable
-public fun ListItemAction(icon: String, onClick: () -> Unit = {}) {
-    IconButton(onClick = onClick) {
+public fun ListItemAction(
+    icon: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit = {},
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+    ) {
         Text(
             text = icon,
             fontSize = 24.sp,
+        )
+    }
+}
+
+@Composable
+private fun AttestationBanner(status: AttestationStatus) {
+    if (status is AttestationStatus.OK) return
+
+    val (backgroundColor, textColor, reason) = when (status) {
+        is AttestationStatus.Degraded -> Triple(
+            Color(0xFFFFF3CD),
+            Color(0xFF856404),
+            status.reason,
+        )
+
+        is AttestationStatus.KO -> Triple(
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer,
+            status.reason,
+        )
+
+        is AttestationStatus.OK -> return
+    }
+
+    Surface(
+        color = backgroundColor,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = textColor,
+            modifier = Modifier.padding(12.dp),
         )
     }
 }

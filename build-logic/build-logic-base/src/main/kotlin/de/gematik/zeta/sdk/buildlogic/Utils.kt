@@ -33,11 +33,13 @@ import java.io.File
 
 val Project.isRootProject get() = this == rootProject
 
+val Project.isJvmEnabled get() = findProperty("de.gematik.zeta.sdk.build-logic.enableJvm") == "true"
+
 val Project.isAndroidEnabled get() = findProperty("de.gematik.zeta.sdk.build-logic.enableAndroid") == "true"
 
 val Project.isIOSEnabled get() = findProperty("de.gematik.zeta.sdk.build-logic.enableIOS") == "true"
 
-val Project.isNativeEnabled get() = findProperty("de.gematik.zeta.sdk.build-logic.enableNative") == "true"
+val Project.isNativeEnabled get() = isWindowsEnabled || isLinuxEnabled || isMacOSEnabled
 
 val Project.isWindowsEnabled get() = findProperty("de.gematik.zeta.sdk.build-logic.enableWindows") == "true"
 

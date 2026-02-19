@@ -28,6 +28,8 @@
 #include "ws_client.h"
 #include "hello.h"
 
+extern "C" void ZetaSdk_Client_ws(ZetaSdk_Client* sdkClient, char* url, ZetaSdk_WSHandler* handler, ZetaSdk_HttpHeader* customHeaders, int customHeaderCount);
+
 extern "C" void ZetaSdk_WSSession_create(ZetaSdk_HttpClient* sdkClient, char* url, ZetaSdk_WSHandler* handler);
 extern "C" void ZetaSdk_WSSession_sendText(ZetaSdk_WSSession* wsSession, char* text);
 extern "C" void ZetaSdk_WSSession_sendBinary(ZetaSdk_WSSession* wsSession, char* binary, int size);

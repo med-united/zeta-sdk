@@ -24,47 +24,52 @@
 
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 
 #include "hello_api.h"
 #include "ws_client_api.h"
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+#define BUFFER_SIZE 1024
 
-char* stompConnectFrame(char* host) {
-    char* format = "CONNECT\naccept-version:1.2\nhost:%s\n\n\u0000";
-    char* buffer = new char[1024];
-    if (int error = snprintf(buffer, sizeof(buffer), format, host) != 0) {
-        std::cout << "Error formatting CONNECT frame: " << error << "\n";
+char* stompConnectFrame(const char* host) {
+    char* format = "CONNECT\naccept-version:1.2\nhost:%s\n\n\00";
+    char* buffer = new char[BUFFER_SIZE];
+    int printedCount = snprintf(buffer, BUFFER_SIZE, format, host);
+    if (printedCount <= 0) {
+        std::cout << "Error formatting CONNECT frame: " << printedCount << "\n";
         std::cout.flush();
         return NULL;
     }
     return buffer;
 }
 
-char* stompSubscribeFrame(char* id, char* destination) {
-    char* format = "SUBSCRIBE\nid:%s\ndestination:%s\n\n\u0000";
-    char* buffer = new char[1024];
-    if (int error = snprintf(buffer, sizeof(buffer), format, id, destination) != 0) {
-        std::cout << "Error formatting SUBSCRIBE frame: " << error << "\n";
+char* stompSubscribeFrame(char* id, char* contextPath, char* destination) {
+    char* format = "SUBSCRIBE\nid:%s\ndestination:%s%s\n\n\00";
+    char* buffer = new char[BUFFER_SIZE];
+    int printedCount = snprintf(buffer, BUFFER_SIZE, format, id, contextPath, destination);
+    if (printedCount <= 0) {
+        std::cout << "Error formatting SUBSCRIBE frame: " << printedCount << "\n";
         std::cout.flush();
         return NULL;
     }
     return buffer;
 }
 
-char* stompSendFrame(char* destination, char* bodyJson) {
-    char* format = "SEND\ndestination:%s\ncontent-type:application/json\n\n%s\u0000";
-    char* buffer = new char[1024];
-    if (int error = snprintf(buffer, sizeof(buffer), format, destination, bodyJson) != 0) {
-        std::cout << "Error formatting SEND frame: " << error << "\n";
+char* stompSendFrame(char* contextPath, char* destination, char* bodyJson) {
+    char* format = "SEND\ndestination:%s%s\ncontent-type:application/json\n\n%s\00";
+    char* buffer = new char[BUFFER_SIZE];
+    int printedCount = snprintf(buffer, BUFFER_SIZE, format, contextPath, destination, bodyJson);
+    if (printedCount <= 0) {
+        std::cout << "Error formatting SEND frame: " << printedCount << "\n";
         std::cout.flush();
         return NULL;
     }
     return buffer;
 }
 
-void sendPrescriptionCommands(ZetaSdk_WSSession* wsSession) {
+void sendPrescriptionCommands(ZetaSdk_WSSession* wsSession, char* wsContextPath) {
     char* createBody =
             "\n{\n"
             "\"prescriptionId\": \"RX-2025-100123\",\n"
@@ -75,20 +80,23 @@ void sendPrescriptionCommands(ZetaSdk_WSSession* wsSession) {
             "\"issuedAt\": \"2025-09-22T10:30:00Z\",\n"
             "\"expiresAt\": \"2025-12-31T23:59:59Z\",\n"
             "\"status\": \"CREATED\"\n"
-            "}\n";
+            "}\n\00";
 
-    char* sendFrame1 = stompSendFrame("/achelos_testfachdienst/app/erezept.create", createBody);
-    ZetaSdk_WSSession_sendText(wsSession, sendFrame1);
+    char* sendFrame1 = stompSendFrame(wsContextPath, "/app/erezept.create", createBody);
+    int sendFrame1Size = strlen(sendFrame1) + 1;
+    ZetaSdk_WSSession_sendBinary(wsSession, sendFrame1, sendFrame1Size);
     free(sendFrame1);
 
-    char* sendFrame2 = stompSendFrame("/achelos_testfachdienst/app/erezept.read.1", "{}");
-    ZetaSdk_WSSession_sendText(wsSession, sendFrame2);
+    char* sendFrame2 = stompSendFrame(wsContextPath, "/app/erezept.read.1", "{}");
+    int sendFrame2Size = strlen(sendFrame2) + 1;
+    ZetaSdk_WSSession_sendBinary(wsSession, sendFrame2, sendFrame2Size);
     free(sendFrame2);
 }
 
-void connectAndSubscribe(ZetaSdk_WSSession* wsSession, char* host) {
+void connectAndSubscribe(ZetaSdk_WSSession* wsSession, char* host, char* wsContextPath) {
     char* connectFrame = stompConnectFrame(host);
-    ZetaSdk_WSSession_sendText(wsSession, connectFrame);
+    int connectFrameSize = strlen(connectFrame) + 1;
+    ZetaSdk_WSSession_sendBinary(wsSession, connectFrame, connectFrameSize);
     free(connectFrame);
 
     ZetaSdk_WSMessage* message = ZetaSdk_WSSession_receiveNext(wsSession);
@@ -97,17 +105,19 @@ void connectAndSubscribe(ZetaSdk_WSSession* wsSession, char* host) {
         std::cout.flush();
     }
 
-    char* subscribeFrame1 = stompSubscribeFrame("sub-1", "/achelos_testfachdienst/topic/erezept");
-    ZetaSdk_WSSession_sendText(wsSession, subscribeFrame1);
+    char* subscribeFrame1 = stompSubscribeFrame("sub-1", wsContextPath, "/topic/erezept");
+    int subscribeFrame1Size = strlen(subscribeFrame1) + 1;
+    ZetaSdk_WSSession_sendBinary(wsSession, subscribeFrame1, subscribeFrame1Size);
     free(subscribeFrame1);
 
-    char* subscribeFrame2 = stompSubscribeFrame("sub-2", "/achelos_testfachdienst/user/queue/erezept");
-    ZetaSdk_WSSession_sendText(wsSession, subscribeFrame2);
-    free(subscribeFrame1);
+    char* subscribeFrame2 = stompSubscribeFrame("sub-2", wsContextPath, "/user/queue/erezept");
+    int subscribeFrame2Size = strlen(subscribeFrame2) + 1;
+    ZetaSdk_WSSession_sendBinary(wsSession, subscribeFrame2, subscribeFrame2Size);
+    free(subscribeFrame2);
 }
 
 void receiveMessages(ZetaSdk_WSSession* wsSession) {
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 2; i++) {
         ZetaSdk_WSMessage* incoming = ZetaSdk_WSSession_receiveNext(wsSession);
 
         if (incoming->type == WS_CLOSE) {
@@ -126,24 +136,46 @@ void receiveMessages(ZetaSdk_WSSession* wsSession) {
     }
 }
 
-void wsHandler(ZetaSdk_WSSession* wsSession) {
-    std::cout << "WSSession Handler: start\n";
-    std::cout.flush();
+void extractHost(char* url, char* host, size_t hostSize) {
+    char* p = strstr(url, "://");
+    if (p) p += 3;
+    else p = url;
 
-    connectAndSubscribe(wsSession, "localhost");
-    sendPrescriptionCommands(wsSession);
-    receiveMessages(wsSession);
-    ZetaSdk_WSSession_close(wsSession);
+    char* end = strchr(p, '/');
+    size_t len = end ? (size_t)(end - p) : strlen(p);
 
-    std::cout << "WSSession Handler: end\n";
-    std::cout.flush();
+    if (len >= hostSize) len = hostSize - 1;
+
+    strncpy(host, p, len);
+    host[len] = '\0';
 }
 
-void runWSSessionSample(ZetaSdk_HttpClient* zetaHttpClient, char* wsBaseUrl) {
+void runWSSessionSample(ZetaSdk_Client* zetaSdkClient, char* wsBaseUrl, char* wsServerContextPath, char* poppToken) {
     std::cout << "WSSession Sample: start\n";
     std::cout.flush();
 
-    ZetaSdk_WSSession_create(zetaHttpClient, wsBaseUrl, &wsHandler);
+    static char wsHost[BUFFER_SIZE];
+    extractHost(wsBaseUrl, wsHost, BUFFER_SIZE);
+
+    static char* wsContextPath = wsServerContextPath;
+    void (*wsHandler)(ZetaSdk_WSSession *) = [](ZetaSdk_WSSession *wsSession) {
+        std::cout << "WSSession Handler: start\n";
+        std::cout.flush();
+
+        connectAndSubscribe(wsSession, wsHost, wsContextPath);
+        sendPrescriptionCommands(wsSession, wsContextPath);
+        receiveMessages(wsSession);
+        ZetaSdk_WSSession_close(wsSession);
+
+        std::cout << "WSSession Handler: end\n";
+        std::cout.flush();
+    };
+
+    ZetaSdk_HttpHeader httpHeaders[] = {
+            {"PoPP", poppToken },
+    };
+
+    ZetaSdk_Client_ws(zetaSdkClient, wsBaseUrl, wsHandler, httpHeaders, ARRAY_SIZE(httpHeaders));
 
     std::cout << "WSSession Sample: end\n";
     std::cout.flush();
@@ -218,6 +250,7 @@ int main() {
     char* cardHandle = std::getenv("SMCB_CARD_HANDLE");
 
     char* wsBaseUrl = std::getenv("WS_BASE_URL");
+    char* wsContextPath = std::getenv("WS_SERVER_CONTEXT_PATH");
     char* poppToken = std::getenv("POPP_TOKEN");
 
     const char* envValue = std::getenv("ASL_PROD");
@@ -225,10 +258,10 @@ int main() {
     if (envValue == nullptr) {
         aslProdEnv = true;
     } else {
-        aslProdEnv = (std::string(envValue).compare(std::string("true")) == 0);
+        aslProdEnv = strcmp(envValue, "true") == 0;
     }
 
-    char* productId = "demo_client";
+    char* productId = "demo-client";
     char* productVersion = "0.2.0";
     char* clientName = "sdk-client";
     char* scopes[] = {"zero:audience"};
@@ -269,8 +302,8 @@ int main() {
     ZetaSdk_Client* zetaSdkClient = ZetaSdk_buildZetaClient(&buildConfig);
     ZetaSdk_HttpClient* zetaHttpClient = ZetaSdk_buildHttpClient(zetaSdkClient);
 
-//    runWSSessionSample(zetaHttpClient, wsBaseUrl);
     runHttpClientSample(zetaHttpClient, poppToken);
+    runWSSessionSample(zetaSdkClient, wsBaseUrl, wsContextPath, poppToken);
 
     ZetaSdk_clearHttpClient(zetaHttpClient);
     ZetaSdk_clearZetaClient(zetaSdkClient);

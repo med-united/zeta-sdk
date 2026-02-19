@@ -32,6 +32,7 @@ import kotlinx.serialization.json.JsonElement
 data class ClientStatement(
     val sub: String,
     val platform: Platform,
+    @SerialName("posture_type") val postureType: PostureType,
     val posture: JsonElement,
     @SerialName("attestation_timestamp") val attestationTimestamp: Long,
 )
@@ -45,4 +46,27 @@ enum class Platform {
     @SerialName("windows") WINDOWS,
 
     @SerialName("linux") LINUX,
+}
+
+@Serializable
+enum class PostureType {
+    @SerialName("android") ANDROID,
+
+    @SerialName("apple") APPLE,
+
+    @SerialName("software") SOFTWARE,
+
+    @SerialName("tpm") TPM,
+}
+
+enum class AttestationType {
+    SOFTWARE,
+    TPM2,
+    ;
+    fun getClaimName(): String = when (this) {
+        SOFTWARE -> "client_statement"
+
+        // "urn:gematik:params:oauth:client-attestation:software"
+        TPM2 -> "client_statement" // "urn:gematik:params:oauth:client-attestation:tpm2"
+    }
 }

@@ -22,6 +22,28 @@
  * #L%
  */
 
-package de.gematik.zeta.sdk.authentication
+package de.gematik.zeta.sdk.attestation.interfaces
 
-class AuthenticationApiTest
+import io.ktor.http.RequestConnectionPoint
+
+data class SocketEntry(
+    val localIp: String,
+    val localPort: Int,
+    val remoteIp: String,
+    val remotePort: Int,
+    val inode: Long,
+)
+
+expect class ProcessMonitor(allowedExecutables: List<String>) {
+    fun isRunning(processName: String): Boolean
+
+    fun findSocketAndPid(origin: RequestConnectionPoint): Int?
+
+    fun getProcessName(pid: Int?): String?
+
+    fun getProcessExecutablePath(pid: Int?): String?
+
+    fun isProcessAllowed(origin: RequestConnectionPoint): Boolean
+}
+
+expect fun getEnv(variable: String): String?

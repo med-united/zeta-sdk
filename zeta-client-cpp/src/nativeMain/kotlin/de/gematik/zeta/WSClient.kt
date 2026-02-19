@@ -50,8 +50,11 @@
 
 package de.gematik.zeta
 
+import de.gematik.zeta.sdk.ZetaSdkClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
+import interop.ZetaSdk_Client
 import interop.ZetaSdk_HttpClient
+import interop.ZetaSdk_HttpHeader
 import interop.ZetaSdk_WSMessage
 import interop.ZetaSdk_WSSession
 import interop.ZetaSdk_WsMessageType
@@ -79,6 +82,7 @@ import kotlinx.cinterop.toKString
 import kotlinx.coroutines.runBlocking
 import platform.posix.memcpy
 import platform.posix.strdup
+import toKList
 import kotlin.experimental.ExperimentalNativeApi
 
 @CName(externName = "ZetaSdk_WSSession_create")
@@ -99,7 +103,43 @@ fun ZetaSdk_WSSession_create(
                     cSession.ptr
                 }
                 handler.invoke(cWsSession)
-            }
+            },
+        )
+    }
+}
+
+@CName(externName = "ZetaSdk_Client_ws")
+fun ZetaSdk_Client_ws(
+    sdkClient: CPointer<ZetaSdk_Client>,
+    url: CPointer<ByteVar>,
+    handler: CPointer<CFunction<(CPointer<ZetaSdk_WSSession>) -> Unit>>,
+    customHeaders: CPointer<ZetaSdk_HttpHeader>?,
+    customHeaderCount: Int,
+) {
+    val zetaHttpClient = sdkClient.pointed.zetaSdkClient!!.asStableRef<ZetaSdkClient>().get()
+    val targetUrl = url.toKString()
+    val headers = customHeaders
+        ?.toKList(customHeaderCount)
+        ?.associate {
+            val key = it?.key?.toKString() ?: ""
+            val value = it?.value?.toKString() ?: ""
+            key to value
+        } ?: emptyMap()
+
+    runBlocking {
+        zetaHttpClient.ws(
+            targetUrl = targetUrl,
+            builder = {
+                disableServerValidation(true)
+            },
+            block = {
+                val cWsSession = nativeHeap.alloc<ZetaSdk_WSSession>().let { cSession ->
+                    cSession.zetaSdkWsSession = StableRef.create(this).asCPointer()
+                    cSession.ptr
+                }
+                handler.invoke(cWsSession)
+            },
+            customHeaders = headers
         )
     }
 }

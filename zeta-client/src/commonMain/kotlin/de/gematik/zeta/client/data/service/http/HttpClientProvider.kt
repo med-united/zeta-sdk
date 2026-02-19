@@ -29,11 +29,15 @@ import de.gematik.zeta.client.di.DIContainer.ASL_PROD
 import de.gematik.zeta.client.di.DIContainer.DISABLE_SERVER_VALIDATION
 import de.gematik.zeta.client.di.DIContainer.SMB_KEYSTORE_CREDENTIALS
 import de.gematik.zeta.client.di.DIContainer.SMCB_CONNECTOR_CONFIG
+import de.gematik.zeta.client.state.AttestationState
+import de.gematik.zeta.logging.Log
 import de.gematik.zeta.sdk.BuildConfig
 import de.gematik.zeta.sdk.StorageConfig
 import de.gematik.zeta.sdk.TpmConfig
 import de.gematik.zeta.sdk.ZetaSdk
-import de.gematik.zeta.sdk.attestation.model.ClientSelfAssessment
+import de.gematik.zeta.sdk.attestation.model.AttestationConfig
+import de.gematik.zeta.sdk.attestation.model.AttestationStatus
+import de.gematik.zeta.sdk.attestation.model.AttestationStatusCallback
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
@@ -63,7 +67,7 @@ public class HttpClientProviderImpl : HttpClientProvider {
         return ZetaSdk.build(
             resource = url,
             config = BuildConfig(
-                "demo_client",
+                "demo-client",
                 productVersion = "0.2.0",
                 "sdk-client",
                 StorageConfig(),
@@ -84,8 +88,9 @@ public class HttpClientProviderImpl : HttpClientProvider {
                         else ->
                             HardcodedTokenProvider()
                     },
+                    AttestationConfig.software(),
                 ),
-                clientSelfAssessment = ClientSelfAssessment("name", "clientId", "manufacturerId", "manufacturerName", "test@manufacturertestmail.de", registrationTimestamp = 0, PlatformProductId.AppleProductId("apple", "macos", listOf("bundleX"))),
+                platformProductId = PlatformProductId.LinuxProductId("linux", "macos", "applicationId", "1.2.3.4"),
                 ZetaHttpClientBuilder()
                     .disableServerValidation(DISABLE_SERVER_VALIDATION)
                     .logging(

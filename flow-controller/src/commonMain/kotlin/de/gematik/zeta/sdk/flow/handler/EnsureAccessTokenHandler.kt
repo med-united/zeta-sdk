@@ -24,9 +24,10 @@
 
 package de.gematik.zeta.sdk.flow.handler
 
-import de.gematik.zeta.sdk.attestation.model.ClientSelfAssessment
+import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.AccessTokenParams
 import de.gematik.zeta.sdk.authentication.AccessTokenProvider
+import de.gematik.zeta.sdk.authentication.AccessTokenProviderImpl.Companion.toHttpForAslInnerRequestDpop
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.authentication.AuthenticationException
 import de.gematik.zeta.sdk.authentication.HttpAuthHeaders
@@ -45,7 +46,7 @@ class EnsureAccessTokenHandler(
     val authConfig: AuthConfig,
     val productId: String,
     val productVersion: String,
-    val clientSelfAssessment: ClientSelfAssessment,
+    val platformProductId: PlatformProductId,
 ) : CapabilityHandler {
     companion object {
         private const val AUTHENTICATION_ERROR_CODE = "AUTHENTICATION_ERROR"
@@ -60,7 +61,12 @@ class EnsureAccessTokenHandler(
 
             return CapabilityResult.RetryRequest { req ->
                 if (!req.headers.contains(HttpHeaders.Authorization)) {
-                    val dpop = tokenProvider.createDpopToken(req.method.value, req.url.toString(), null, hashedToken)
+                    val dpopUrl = if (ctx.configurationStorage.aslRequired(ctx.resource)) {
+                        req.url.toString().toHttpForAslInnerRequestDpop()
+                    } else {
+                        req.url.toString()
+                    }
+                    val dpop = tokenProvider.createDpopToken(req.method.value, dpopUrl, null, hashedToken)
                     req.headers[HttpHeaders.Authorization] = "${HttpAuthHeaders.Dpop} $authToken"
                     req.headers[HttpAuthHeaders.Dpop] = dpop
                 }
@@ -90,7 +96,7 @@ class EnsureAccessTokenHandler(
         val nonceEndpoint = requireNotNull(authServer.nonceEndpoint) {
             "Missing nonce endpoint for resource: ${ctx.resource}"
         }
-        val clientId = requireNotNull(ctx.clientRegistrationStorage.getClientId(ctx.resource)) {
+        val clientId = requireNotNull(ctx.clientRegistrationStorage.getClientId(authServer.issuer)) {
             "Missing client_id for resource ${ctx.resource}"
         }
         val issuer = requireNotNull(ctx.configurationStorage.getAuthServer(ctx.resource)?.issuer) {
@@ -102,13 +108,6 @@ class EnsureAccessTokenHandler(
             }
         }
 
-        val registrationInfo = ctx.clientRegistrationStorage.getRegistrationInfo(ctx.resource)
-        checkNotNull(registrationInfo) { "The registration information could not be obtained" }
-        checkNotNull(registrationInfo.clientId) { "clientId could not be obtained from the registration" }
-        checkNotNull(registrationInfo.clientIdIssuedAt) { "clientIdIssuedAt could not be obtained from the registration" }
-
-        val clientAssessmentWithRegistrationInfo = clientSelfAssessment.copy(clientId = registrationInfo.clientId, registrationTimestamp = registrationInfo.clientIdIssuedAt!!)
-
         return AccessTokenParamsWithEndpoints(
             tokenEndpoint = tokenEndpoint,
             nonceEndpoint = nonceEndpoint,
@@ -119,7 +118,7 @@ class EnsureAccessTokenHandler(
                 expiration = authConfig.exp,
                 scopes = scopes,
                 audience = audienceFromIssuer(issuer),
-                clientAssessmentWithRegistrationInfo,
+                platformProductId,
             ),
         )
     }

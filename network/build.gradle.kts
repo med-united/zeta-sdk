@@ -1,5 +1,6 @@
 import de.gematik.zeta.sdk.buildlogic.isAndroidEnabled
 import de.gematik.zeta.sdk.buildlogic.isIOSEnabled
+import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
 import de.gematik.zeta.sdk.buildlogic.isNativeEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 
@@ -31,9 +32,11 @@ setupBuildLogic {
             }
         }
 
-        sourceSets.jvmMain.dependencies {
-            api(libs.ktor.client.okhttp)
-            implementation(libs.okhttp.tls)
+        if (project.isJvmEnabled) {
+            sourceSets.jvmMain.dependencies {
+                api(libs.ktor.client.okhttp)
+                implementation(libs.okhttp.tls)
+            }
         }
 
         if (project.isIOSEnabled) {
@@ -62,10 +65,12 @@ setupBuildLogic {
             }
         }
 
-        sourceSets.jvmTest.dependencies {
-            implementation(kotlin("test"))
-            implementation(libs.okhttp.mockwebserver)
-            implementation(libs.okhttp.tls)
+        if (project.isJvmEnabled) {
+            sourceSets.jvmTest.dependencies {
+                implementation(kotlin("test"))
+                implementation(libs.okhttp.mockwebserver)
+                implementation(libs.okhttp.tls)
+            }
         }
     }
 }

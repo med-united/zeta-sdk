@@ -26,6 +26,7 @@ package de.gematik.zeta.sdk
 
 import de.gematik.zeta.sdk.asl.AslApi
 import de.gematik.zeta.sdk.asl.AslApiImpl
+import de.gematik.zeta.sdk.asl.InnerHttpCodecImpl
 import de.gematik.zeta.sdk.asl.aslDecryptionPlugin
 import de.gematik.zeta.sdk.authentication.AccessTokenProvider
 import de.gematik.zeta.sdk.authentication.AccessTokenProviderImpl
@@ -57,7 +58,6 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.request.url
 import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpStatusCode
 import io.ktor.util.appendAll
 import kotlinx.coroutines.coroutineScope
 import kotlin.time.Clock.System
@@ -144,7 +144,7 @@ private class ZetaSdkClientImpl(
             authConfig = cfg.authConfig,
             cfg.productId,
             cfg.productVersion,
-            cfg.clientSelfAssessment,
+            cfg.platformProductId,
         )
     }
     private lateinit var aslApi: AslApi
@@ -188,7 +188,7 @@ private class ZetaSdkClientImpl(
         mainHttpClient = ZetaHttpClientBuilder(resource)
             .apply(builder)
             .build(addExtras = {
-                install(aslDecryptionPlugin(aslApi))
+                install(aslDecryptionPlugin(aslApi, InnerHttpCodecImpl()))
                 install(zetaPlugin(orchestrator, flowContext))
             })
 

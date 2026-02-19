@@ -22,8 +22,10 @@
  * #L%
  */
 
-import de.gematik.zeta.sdk.attestation.model.ClientSelfAssessment
+import de.gematik.zeta.sdk.attestation.model.ClientStatement
+import de.gematik.zeta.sdk.attestation.model.Platform
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
+import de.gematik.zeta.sdk.attestation.model.PostureType
 import de.gematik.zeta.sdk.storage.InMemoryStorage
 import de.gematik.zeta.sdk.tpm.Tpm
 import de.gematik.zeta.sdk.tpm.TpmStorageImpl
@@ -42,7 +44,7 @@ import kotlin.test.assertTrue
 
 class AttestationApiTest {
     val fixedUuid = { "11111111-2222-3333-4444-555555555555" }
-    val clientSelfAssessment = ClientSelfAssessment("name", "clientId", "manufacturerId", "manufacturerName", "test@manufacturertestmail.de", registrationTimestamp = 0, PlatformProductId.AppleProductId("apple", "macos", listOf("bundleX")))
+    val platformProductIdAppleProductId = PlatformProductId.AppleProductId("apple", "macos", listOf("bundleX"))
 
     @Test
     fun createClientAssertion_shallReturnJWTWithThreeParts() = runTest {
@@ -50,7 +52,7 @@ class AttestationApiTest {
         val nonce = "SERVER-NONCE".encodeToByteArray()
         val exp = 1_700_000_000L
         val clientId = "client-sdk"
-        val productId = "demo_product"
+        val productId = "demo-product"
         val productVersion = "0.2.0"
         val tokenEndpoint = "https://zeta-test.de/token"
 
@@ -62,7 +64,7 @@ class AttestationApiTest {
             clientId = clientId,
             exp = exp,
             tokenEndpoint = tokenEndpoint,
-            clientSelfAssessment,
+            platformProductIdAppleProductId,
         )
 
         val parts = jwt.split('.')
@@ -87,7 +89,7 @@ class AttestationApiTest {
             clientId = clientId,
             exp = exp,
             tokenEndpoint = tokenEndpoint,
-            clientSelfAssessment,
+            platformProductIdAppleProductId,
         )
         val parts = jwt.split('.')
         val header = decodeJson(parts[0])
@@ -115,7 +117,7 @@ class AttestationApiTest {
             clientId = clientId,
             exp = exp,
             tokenEndpoint = tokenEndpoint,
-            clientSelfAssessment,
+            platformProductIdAppleProductId,
         )
         val parts = jwt.split('.')
         val payload = decodeJson(parts[1])
@@ -131,11 +133,33 @@ class AttestationApiTest {
         assertNotNull(payload["client_statement"]?.jsonObject)
     }
 
-    private fun decodeJson(b64: String): JsonObject {
-        val pad = (4 - b64.length % 4) % 4
-        val padded = b64 + "=".repeat(pad)
-        val decoded = Base64.UrlSafe.decode(padded)
+    @Test
+    fun clientStatement_matchesSchemaNames() {
+        val json = Json
 
+        val statement = ClientStatement(
+            sub = "client",
+            platform = Platform.ANDROID,
+            postureType = PostureType.SOFTWARE,
+            posture = JsonObject(emptyMap()),
+            attestationTimestamp = 1L,
+        )
+
+        val obj = json.encodeToJsonElement(ClientStatement.serializer(), statement).jsonObject
+
+        val expectedKeys = setOf(
+            "sub",
+            "platform",
+            "posture_type",
+            "posture",
+            "attestation_timestamp",
+        )
+
+        assertEquals(expectedKeys, obj.keys)
+    }
+
+    private fun decodeJson(b64: String): JsonObject {
+        val decoded = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).decode(b64)
         return Json.decodeFromString<JsonObject>(decoded.decodeToString())
     }
 }

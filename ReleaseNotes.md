@@ -2,13 +2,14 @@
 
 # Release Notes ZETA SDK
 
-## Release: 0.2.10
+## Version: v0.3.1
 
 This version implements the "happy flow" for the ZETA protocol for the ZETA client SDK.
 
 Therefore, the API of the clients and the network protocol is stable (with comments see below).
 Not all validations are implemented yet and will follow in later releases.
 
+It provides SDK bindings for kotlin (as original implementation), Java, and C++.
 
 ### Included Features:
 
@@ -29,13 +30,37 @@ Not all validations are implemented yet and will follow in later releases.
 - testdriver client as container image to use as a proxy for a resource server in test setups
 - demo client in kotlin to manually test against the test Fachdienst (resource server)
 - Java-client example for how to integrate and use the SDK in a Java application
-- C++ client build (but see comments below)
+- C++ client build
 
 ### Known issues:
 
 #### Functional
 
-- C++ API is implemented but websockets are not yet functional
+## Changes from 0.3.0
+
+- Fixed demo client to enable functionalities (add, edit, delete) when the attestation state is unknown
+
+## Changes from 0.2.12
+
+- Attestation service for Linux (TPM based)
+- Increase code coverage for modules Crypto and ASL
+- Fixes included:
+  - Dpop token htu value for request with ASL
+  - Proper configuration handling, when PDP and PEP are on different hosts
+  - Improvement for reading registration number from SM-B certificate
+  - Handling of X-Forwarded headers when using ASL
+
+## Changes from 0.2.11
+
+- Fix websockets on C++ client
+
+- Work on the Client Attestation Service
+  - Integrate tpm2-tss library bindings to access TPM (only linux)
+  - Implement TPM commands
+
+## Changes from 0.2.10 (internal)
+
+- Add missing copyright header
 
 ## Changes from 0.2.9
 

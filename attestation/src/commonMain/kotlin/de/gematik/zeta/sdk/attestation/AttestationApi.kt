@@ -23,19 +23,33 @@
  */
 
 import de.gematik.zeta.logging.Log
+import de.gematik.zeta.platform.getPlatformInfo
+import de.gematik.zeta.sdk.attestation.AttestationResponse
+import de.gematik.zeta.sdk.attestation.AttestationService
+import de.gematik.zeta.sdk.attestation.model.AttestationConfig
 import de.gematik.zeta.sdk.attestation.model.ClientAssertionJwt
 import de.gematik.zeta.sdk.attestation.model.ClientSelfAssessment
 import de.gematik.zeta.sdk.attestation.model.ClientStatement
+import de.gematik.zeta.sdk.attestation.model.PlatformProductId
+import de.gematik.zeta.sdk.attestation.model.PostureType
+import de.gematik.zeta.sdk.attestation.model.TpmPosture
 import de.gematik.zeta.sdk.attestation.model.buildPosture
 import de.gematik.zeta.sdk.attestation.model.getPlatform
+import de.gematik.zeta.sdk.attestation.model.getPostureType
 import de.gematik.zeta.sdk.crypto.hashWithSha256
+import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
 import de.gematik.zeta.sdk.tpm.TpmProvider
 import io.ktor.utils.io.charsets.Charsets
 import io.ktor.utils.io.core.toByteArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlin.io.encoding.Base64
+import kotlin.io.encoding.Base64.PaddingOption
 import kotlin.time.Clock
 
 /**
@@ -57,7 +71,7 @@ interface AttestationApi {
      *
      * @return Compact JWS string: `<base64url(header)>.<base64url(payload)>.<base64url(signature)>`.
      */
-    suspend fun createClientAssertion(productId: String, productVersion: String, nonce: ByteArray, clientId: String, exp: Long, tokenEndpoint: String, clientSelfAssessment: ClientSelfAssessment): String
+    suspend fun createClientAssertion(productId: String, productVersion: String, nonce: ByteArray, clientId: String, exp: Long, tokenEndpoint: String, platformProductId: PlatformProductId): String
 }
 
 /**
@@ -66,7 +80,7 @@ interface AttestationApi {
  * Responsibilities:
  *  - Generate the per-client *instance key* via [TpmProvider].
  *  - Build a client-statement including an attestation challenge:
- *      attChallenge = SHA256( SHA256(clientPubKey) || nonce )
+ *      attChallenge = SHA256( jwkThumbprint || nonce )
  *  - Emit a compact JWS (header.payload.signature) signed with the client key.
  *
  */
@@ -74,7 +88,15 @@ class AttestationApiImpl(
     private val tpmProvider: TpmProvider,
     private val uuidGen: () -> String = { randomUUID() },
     private val clockEpochSeconds: () -> Long = { Clock.System.now().epochSeconds },
+    private val attestationConfig: AttestationConfig = AttestationConfig.software(),
 ) : AttestationApi {
+    val json = Json {
+        encodeDefaults = true
+    }
+    private val attestationService: AttestationService? by lazy {
+        attestationConfig.getAttestationService(ZetaHttpClientBuilder().build())
+    }
+
     /**
      * Create a signed client assertion JWT for OAuth token exchange.
      *
@@ -93,24 +115,51 @@ class AttestationApiImpl(
         clientId: String,
         exp: Long,
         tokenEndpoint: String,
-        clientSelfAssessment: ClientSelfAssessment,
+        platformProductId: PlatformProductId,
     ): String {
-        Log.d { "Getting client instant keys" }
+        Log.i { "Getting client instant keys" }
         val clientInstanceKeys = tpmProvider.generateClientInstanceKey()
 
-        Log.d { "Getting uuid for jti" }
+        Log.i { "Getting uuid for jti" }
         val jti: String = uuidGen()
 
-        Log.d { "Getting client statement" }
-        val statement = getStatement(nonce, clientInstanceKeys.encoded, productId, productVersion, clientId)
+        val thumbprint = getThumbprint(clientInstanceKeys.jwk.kid)
+        val attChallenge = calculateAttestationChallenge(nonce, thumbprint)
 
-        Log.d { "Getting client assertion jwt" }
+        val statementJson = when (attestationConfig) {
+            is AttestationConfig.Software -> {
+                Log.i { "Getting software client statement" }
+                getSoftwareStatement(
+                    attChallenge,
+                    clientInstanceKeys.jwk,
+                    productId,
+                    productVersion,
+                    clientId,
+                    platformProductId,
+                )
+            }
+
+            is AttestationConfig.TpmHttp,
+            is AttestationConfig.TpmCustom,
+            -> {
+                Log.i { "Generating TPM attestation statement" }
+                getTpmStatement(attChallenge, clientId, productId, clientId, platformProductId)
+            }
+        }
+
+        Log.i { "Getting client assertion jwt" }
         val clientAssertion = ClientAssertionJwt(
             header = ClientAssertionJwt.Header(alg = AsymAlg.ES256.name, typ = "JWT", jwk = clientInstanceKeys.jwk),
-            payload = ClientAssertionJwt.Payload(clientId, clientId, listOf(tokenEndpoint), exp, jti, Json.encodeToJsonElement(statement), clientSelfAssessment),
+            payload = ClientAssertionJwt.Payload(clientId, clientId, listOf(tokenEndpoint), exp, jti, attestationConfig.type, statementJson, ClientSelfAssessment("", clientId, "", "", "test@emailtest.de", clockEpochSeconds(), platformProductId)),
         )
 
         return getJwt(clientAssertion)
+    }
+
+    private fun getThumbprint(kid: String): ByteArray {
+        return Base64.UrlSafe
+            .withPadding(PaddingOption.ABSENT)
+            .decode(kid)
     }
 
     /**
@@ -120,22 +169,99 @@ class AttestationApiImpl(
      *  - posture
      *  - attestation timestamp (epoch seconds)
      */
-    private suspend fun getStatement(nonce: ByteArray, clientInstancePublicKey: ByteArray, productId: String, productVersion: String, sub: String): ClientStatement {
-        val attestationTimestamp: Long = clockEpochSeconds()
-        val attChallenge = Base64.encode(calculateAttestationChallenge(nonce, clientInstancePublicKey))
-        val posture: JsonElement = buildPosture(productId, productVersion, attChallenge, b64url(clientInstancePublicKey))
+    private suspend fun getSoftwareStatement(
+        attestationChallenge: ByteArray,
+        jwk: Jwk,
+        productId: String,
+        productVersion: String,
+        sub: String,
+        platformProductId: PlatformProductId,
+    ): ClientStatement {
+        val publicCanonicalJsonB64 = b64url(jwk.toCanonicalJson().toByteArray(Charsets.UTF_8))
 
-        return ClientStatement(sub, getPlatform(), posture, attestationTimestamp)
+        val attestationTimestamp: Long = clockEpochSeconds()
+        val posture: JsonElement = buildPosture(platformProductId, productId, productVersion, b64url(attestationChallenge), publicCanonicalJsonB64)
+        val postureType = getPostureType()
+        return ClientStatement(sub, getPlatform(), postureType, posture, attestationTimestamp)
+    }
+
+    private suspend fun getTpmStatement(
+        attestationChallenge: ByteArray,
+        productId: String,
+        productVersion: String,
+        sub: String,
+        platformProductId: PlatformProductId,
+    ): ClientStatement {
+        val service = attestationService
+            ?: error("Attestation not configured")
+
+        val attestationResponse = service.generateAttestation(Base64.encode(attestationChallenge))
+        attestationResponse.error?.let {
+            error(attestationResponse.error.message)
+        }
+
+        val attestationTimestamp: Long = clockEpochSeconds()
+
+        val tpmPosture = buildTpmPosture(attestationResponse, platformProductId, productId, productVersion)
+
+        return ClientStatement(
+            sub = sub,
+            platform = getPlatform(),
+            postureType = PostureType.TPM,
+            posture = tpmPosture,
+            attestationTimestamp = attestationTimestamp,
+        )
+    }
+
+    private fun buildTpmPosture(
+        response: AttestationResponse,
+        platformProductId: PlatformProductId,
+        productId: String,
+        productVersion: String,
+    ): JsonElement {
+        val platformInfo = getPlatformInfo()
+        val os = platformInfo.os
+        val osVersion = platformInfo.osVersion
+        val arch = platformInfo.arch
+
+        return json.encodeToJsonElement(
+            TpmPosture.serializer(),
+            TpmPosture(
+                platformProductId,
+                productId,
+                productVersion,
+                os,
+                osVersion,
+                arch,
+                response.attestationKey,
+                response.tpmQuote,
+                // response.tpmQuoteSignature,
+                response.eventLog ?: "",
+                response.certificateChain,
+            ),
+        )
     }
 
     /** Create JWS by signing base64url(header) + "." + base64url(payload). */
     private suspend fun getJwt(jwt: ClientAssertionJwt): String {
-        val json = Json {
-            encodeDefaults = true
+        val headerB64 = b64url(json.encodeToString(jwt.header).toByteArray(Charsets.UTF_8))
+
+        val payloadJson = buildJsonObject {
+            put("iss", jwt.payload.iss)
+            put("sub", jwt.payload.sub)
+            putJsonArray("aud") {
+                jwt.payload.aud.forEach { add(it) }
+            }
+            put("exp", jwt.payload.exp)
+            put("jti", jwt.payload.jti)
+
+            jwt.payload.clientStatement.let { statement ->
+                put(jwt.payload.attestationType.getClaimName(), json.encodeToJsonElement(statement))
+            }
+            put("urn:telematik:client-self-assessment", json.encodeToJsonElement(jwt.payload.clientSelfAssessment))
         }
 
-        val headerB64 = b64url(json.encodeToString(jwt.header).toByteArray(Charsets.UTF_8))
-        val payloadB64 = b64url(json.encodeToString(jwt.payload).toByteArray(Charsets.UTF_8))
+        val payloadB64 = b64url(payloadJson.toString().toByteArray(Charsets.UTF_8))
 
         val signInput = "$headerB64.$payloadB64".toByteArray(Charsets.UTF_8)
         val sig = tpmProvider.signWithClientKey(signInput)
@@ -145,30 +271,25 @@ class AttestationApiImpl(
     }
 
     /**
-     * Calculate attestation challenge = SHA-256( SHA-256(pubKey) || nonce ).
+     * Calculate attestation challenge = SHA-256(jwkThumbprint || nonce).
      *
-     * @param nonce     Server-provided nonce.
-     * @param publicKey Raw client instance public key bytes.
+     * @param nonce       Server-provided nonce.
+     * @param thumbprint  JWK thumbprint (SHA-256 of canonical JWK).
      */
-    private fun calculateAttestationChallenge(nonce: ByteArray, publicKey: ByteArray): ByteArray {
-        // Calculate attestation challenge = SHA256(SHA256(pubKey) || nonce)
-        Log.d { "Hashing the public key" }
-        val publicKeyHash = hashWithSha256(publicKey)
+    private fun calculateAttestationChallenge(nonce: ByteArray, thumbprint: ByteArray): ByteArray {
+        val combined = ByteArray(thumbprint.size + nonce.size)
+        thumbprint.copyInto(combined, destinationOffset = 0)
+        nonce.copyInto(combined, destinationOffset = thumbprint.size)
 
-        Log.d { "Calculation of the attestation challenge" }
-        val attestationChallenge = ByteArray(publicKeyHash.size + nonce.size)
-        publicKeyHash.copyInto(attestationChallenge, destinationOffset = 0)
-        nonce.copyInto(attestationChallenge, destinationOffset = publicKeyHash.size)
+        val attestationChallenge = hashWithSha256(combined)
 
-        Log.d { "Hashing the attestation challenge" }
-        return hashWithSha256(attestationChallenge)
+        return attestationChallenge
     }
 
     /** Base64URL without padding, URL-safe alphabet. */
     private fun b64url(bytes: ByteArray): String {
-        val std = Base64.encode(bytes)
-        return std.trimEnd('=')
-            .replace('+', '-')
-            .replace('/', '_')
+        return Base64.UrlSafe
+            .withPadding(PaddingOption.ABSENT)
+            .encode(bytes)
     }
 }

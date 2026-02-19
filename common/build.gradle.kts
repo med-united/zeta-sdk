@@ -1,5 +1,6 @@
 import de.gematik.zeta.sdk.buildlogic.isAndroidEnabled
 import de.gematik.zeta.sdk.buildlogic.isIOSEnabled
+import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 
 plugins {
@@ -24,8 +25,10 @@ setupBuildLogic {
             }
         }
 
-        sourceSets["jvmCommonMain"].dependencies{
-            implementation(libs.logger.slf4j.simple)
+        if (project.isJvmEnabled) {
+            sourceSets["jvmCommonMain"].dependencies {
+                implementation(libs.logger.slf4j.simple)
+            }
         }
 
         if (project.isAndroidEnabled || project.isIOSEnabled) {

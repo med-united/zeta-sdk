@@ -59,12 +59,5 @@ public fun ZetaClientApp() {
                 HelloZetaComponent()
             }
         }
-//        Box(
-//            modifier = Modifier
-//                .fillMaxHeight()
-//                .weight(1f)
-//        ) {
-//            HelloZetaComponent()
-//        }
     }
 }
