@@ -89,7 +89,7 @@ class ConnectorApiImpl(
         val client = buildHttpClient(config)
         val request = ReadCardCertificate(
             cardHandle,
-            Context(mandantId, clientSystemId, workspaceId),
+            Context(mandantId, clientSystemId, workspaceId, userId),
             CertRefList(listOf("C.AUT")),
         )
         val response = client.post("CertificateService") {
