@@ -252,6 +252,7 @@ class AttestationApiImpl(
                 jwt.payload.aud.forEach { add(it) }
             }
             put("exp", jwt.payload.exp)
+            put("iat", clockEpochSeconds())
             put("jti", jwt.payload.jti)
 
             jwt.payload.clientStatement.let { statement ->
