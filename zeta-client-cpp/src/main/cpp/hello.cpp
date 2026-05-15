@@ -35,6 +35,65 @@
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define BUFFER_SIZE 1024
 
+#include <map>
+#include <string>
+#include <mutex>
+
+struct CppStorage {
+    std::map<std::string, std::string> data;
+    std::mutex mtx;
+
+    static void put(void* ctx, const char* key, const char* value, ZetaSdk_VoidCallback cb, void* cbCtx) {
+        auto* self = static_cast<CppStorage*>(ctx);
+        {
+            std::lock_guard<std::mutex> lock(self->mtx);
+            self->data[key] = value;
+        }
+        //std::cout << "[Storage] put: " << key << " = " << value << "\n";
+        //std::cout.flush();
+        cb(cbCtx);
+    }
+
+    static void get(void* ctx, const char* key, ZetaSdk_StringCallback cb, void* cbCtx) {
+        auto* self = static_cast<CppStorage*>(ctx);
+        const char* result;
+        {
+            std::lock_guard<std::mutex> lock(self->mtx);
+            auto it = self->data.find(key);
+            result = it != self->data.end() ? it->second.c_str() : nullptr;
+        }
+        //std::cout << "[Storage] get: " << key << " = " << (result ? result : "<null>") << "\n";
+        //std::cout.flush();
+        cb(cbCtx, result);
+    }
+
+    static void remove(void* ctx, const char* key, ZetaSdk_VoidCallback cb, void* cbCtx) {
+        auto* self = static_cast<CppStorage*>(ctx);
+        {
+            std::lock_guard<std::mutex> lock(self->mtx);
+            self->data.erase(key);
+        }
+
+        std::cout << "[Storage] remove: " << key << "\n";
+        std::cout.flush();
+
+        cb(cbCtx);
+    }
+
+    static void clear(void* ctx, ZetaSdk_VoidCallback cb, void* cbCtx) {
+        auto* self = static_cast<CppStorage*>(ctx);
+        {
+            std::lock_guard<std::mutex> lock(self->mtx);
+            self->data.clear();
+        }
+
+        std::cout << "[Storage] clear\n";
+        std::cout.flush();
+
+        cb(cbCtx);
+    }
+};
+
 char* stompConnectFrame(const char* host) {
     char* format = "CONNECT\naccept-version:1.2\nhost:%s\n\n\00";
     char* buffer = new char[BUFFER_SIZE];
@@ -273,12 +332,28 @@ int main() {
         aslProdEnv = strcmp(envValue, "true") == 0;
     }
 
-    char* productId = "demo-client";
-    char* productVersion = "0.5.0";
+    char* productId = "ZETA-Test-Client";
+    char* productVersion = "1.0.0";
     char* clientName = "sdk-client";
     char* scopes[] = {"zero:audience"};
 
-    ZetaSdk_StorageConfig storageConfig = {};
+
+    static CppStorage myStorage;
+
+    ZetaSdk_StorageVTable storageVTable = {
+            &myStorage,
+            CppStorage::put,
+            CppStorage::get,
+            CppStorage::remove,
+            CppStorage::clear,
+    };
+
+    ZetaSdk_StorageConfig storageConfig = {
+            nullptr,
+            nullptr,
+            &storageVTable,
+    };
+
     ZetaSdk_TpmConfig tpmConfig = {};
     ZetaSdk_SmbConfig smbConfig = {
             keystoreFile,

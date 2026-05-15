@@ -1,4 +1,4 @@
-import de.gematik.zeta.sdk.buildlogic.isMacOSEnabled
+import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
 import de.gematik.zeta.sdk.buildlogic.isNativeEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 import org.jetbrains.kotlin.gradle.dsl.ExplicitApiMode
@@ -27,9 +27,15 @@ setupBuildLogic {
             implementation(libs.ktor.client.mock)
         }
 
+        if (project.isJvmEnabled) {
+            sourceSets.jvmTest.dependencies {
+                implementation(kotlin("test"))
+            }
+        }
+
         if (project.isNativeEnabled) {
             sourceSets.getByName("desktopMain").dependencies {
-                implementation("com.squareup.okio:okio:3.9.0")
+                implementation(libs.okio)
             }
         }
     }

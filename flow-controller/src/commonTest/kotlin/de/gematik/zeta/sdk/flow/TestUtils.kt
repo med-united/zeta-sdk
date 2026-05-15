@@ -77,11 +77,7 @@ class FakeApi(
 fun getDummyFlowContext(): FlowContext =
     FlowContextImpl(
         "https://api.example.com",
-        object : ForwardingClient {
-            override suspend fun executeOnce(builder: HttpRequestBuilder): ZetaHttpResponse {
-                TODO("Not need for test")
-            }
-        },
+        { TODO("Not need for test") },
         InMemoryStorage(),
     )
 

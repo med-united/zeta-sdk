@@ -24,13 +24,7 @@
 package de.gematik.zeta.driver
 
 import de.gematik.zeta.driver.model.ConfigureRequest
-import de.gematik.zeta.driver.model.SdkInstanceConfig
 import de.gematik.zeta.logging.Log
-import de.gematik.zeta.sdk.ZetaSdkClient
-import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
-import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
-import de.gematik.zeta.sdk.storage.InMemoryStorage
-import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -45,124 +39,82 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.webSocket
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import java.lang.System
-import kotlin.sequences.forEach
 
-private val store = InMemoryStorage()
-private lateinit var globalSdk: ZetaSdkClient
-private lateinit var globalConfig: SdkInstanceConfig
 public val customCaPems: MutableList<String> = mutableListOf()
 
-private var globalHttpClient: ZetaHttpClient? = null
-public fun Application.testDriverRouting() {
-    globalConfig = SdkInstanceConfig.fromFileOrEnv()
-    rebuildClient()
-
+public fun Application.testDriverRouting(
+    manager: TestDriverManager = TestDriverManager(),
+) {
     routing {
         route("/proxy/{path...}") {
             handle {
-                forward(call, globalHttpClient!!, globalConfig)
+                forward(call, manager.httpClient, manager.config)
             }
         }
 
         webSocket("/proxy/{path...}") {
-            val targetUrl = buildWsTargetUrl(call, globalConfig)
-            forwardWs(this, globalSdk, targetUrl, globalConfig)
+            val targetUrl = buildWsTargetUrl(call, manager.config)
+            forwardWs(this, manager.sdk, targetUrl, manager.config)
         }
 
-        get("/testdriver-api/authenticate") { authenticate(call, globalSdk) }
-        get("/testdriver-api/discover") { discover(call, globalSdk) }
-        get("/testdriver-api/register") { register(call, globalSdk) }
-        get("/testdriver-api/storage") { storage(call) }
-        get("/testdriver-api/reset") { resetDriver(call) }
-        post("/testdriver-api/configure") { configure(call) }
-        get("/health") { call.respondText("alive") }
+        get("/testdriver-api/authenticate") {
+            authenticate(call, manager.sdk)
+        }
+
+        get("/testdriver-api/discover") {
+            discover(call, manager.sdk)
+        }
+
+        get("/testdriver-api/register") {
+            register(call, manager.sdk)
+        }
+
+        get("/testdriver-api/storage") {
+            storage(call, manager)
+        }
+        get("/testdriver-api/reset") {
+            resetDriver(call, manager)
+        }
+
+        post("/testdriver-api/configure") {
+            configure(call, manager)
+        }
+
+        get("/health") {
+            call.respondText("alive")
+        }
     }
 }
 
-private fun rebuildClient() {
-    globalSdk = newSdk(storage = store, globalConfig)
-    globalHttpClient = globalSdk.httpClient {
-        logging(LogLevel.ALL, logger)
-        disableServerValidation(
-            "true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()),
-        )
-        dispatcher(300, 300)
-        customCaPems.forEach { pem -> addCaPem(pem) }
-    }
-}
-
-private suspend fun resetDriver(call: ApplicationCall) {
+private suspend fun resetDriver(call: ApplicationCall, manager: TestDriverManager) {
     try {
-        globalConfig = SdkInstanceConfig.fromFileOrEnv()
-        customCaPems.clear()
-        rebuildClient()
-        return reset(call, globalSdk)
+        manager.reset()
+        reset(call, manager.sdk)
     } catch (e: Exception) {
         Log.e(e) { "Failed to reset TestDriver" }
         call.respond(HttpStatusCode.InternalServerError, "Failed to reset TestDriver: ${e.message}")
     }
 }
 
-private suspend fun storage(
-    call: ApplicationCall,
-) {
+private suspend fun storage(call: ApplicationCall, manager: TestDriverManager) {
     try {
-        val snapshot = store.map.toList()
-        val entries: JsonObject = buildJsonObject {
-            snapshot.asSequence()
-                .forEach { (key, value) ->
-                    val trimmed = value.trim()
-                    val element: JsonElement = runCatching {
-                        Json.parseToJsonElement(trimmed)
-                    }.getOrElse {
-                        JsonPrimitive(trimmed)
-                    }
-                    put(key, element)
-                }
-        }
-        call.respondText(Json.encodeToString(NestedUnquotedJson, entries), ContentType.Application.Json)
+        val entries = manager.getStorageSnapshot()
+        call.respondText(
+            Json.encodeToString(NestedUnquotedJson, entries),
+            ContentType.Application.Json,
+        )
     } catch (ex: Throwable) {
         call.respond(HttpStatusCode.InternalServerError, ex.message.toString())
     }
 }
 
-private suspend fun configure(call: RoutingCall) {
+private suspend fun configure(call: RoutingCall, manager: TestDriverManager) {
     try {
         val request = call.receive<ConfigureRequest>()
-        if (request.resource.isNotEmpty()) {
-            globalConfig = globalConfig.copy(fachdienstUrl = request.resource)
-        }
-        if (request.caCertificatePem.isNotEmpty()) {
-            customCaPems.clear()
-            customCaPems.add(request.caCertificatePem)
-        }
-        rebuildClient()
+        manager.configure(request)
         call.respondText("Test driver configured successfully", ContentType.Text.Plain)
     } catch (e: Exception) {
         Log.e(e) { "Failed to configure TestDriver" }
         call.respond(HttpStatusCode.BadRequest, "Failed to configure TestDriver: ${e.message}")
-    }
-}
-
-private fun ZetaSdkClient.buildHttpClient(
-    configureCa: (ZetaHttpClientBuilder.() -> Unit)? = null,
-): ZetaHttpClient {
-    return this.httpClient {
-        logging(LogLevel.ALL, logger)
-        disableServerValidation(
-            "true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()),
-        )
-        dispatcher(300, 300)
-
-        customCaPems.forEach { pem ->
-            addCaPem(pem)
-        }
-
-        configureCa?.invoke(this)
     }
 }

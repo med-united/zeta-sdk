@@ -31,7 +31,6 @@ import de.gematik.zeta.sdk.network.http.client.config.SecurityConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
 import io.ktor.client.engine.HttpClientEngine
-import io.ktor.client.plugins.logging.DEFAULT
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.http.HttpStatusCode
@@ -64,7 +63,7 @@ import io.ktor.http.HttpStatusCode
  *
  * Thread-safety: the builder is mutable and not thread-safe. Build once and share the resulting [HttpClient].
  */
-public class ZetaHttpClientBuilder(private val baseUrl: String = "") {
+public open class ZetaHttpClientBuilder(private val baseUrl: String = "") {
     private var network: NetworkConfig = NetworkConfig()
     private var security: SecurityConfig = SecurityConfig()
     private var monitoring: MonitoringConfig = MonitoringConfig()
@@ -82,13 +81,6 @@ public class ZetaHttpClientBuilder(private val baseUrl: String = "") {
         network = network.copy(
             connectionTimeoutMillis = connectMs ?: network.connectionTimeoutMillis,
             requestTimeoutMillis = requestMs ?: network.requestTimeoutMillis,
-        )
-    }
-
-    public fun dispatcher(maxRequest: Int? = null, maxRequestPerHost: Int? = null): ZetaHttpClientBuilder = apply {
-        network = network.copy(
-            maxRequest = maxRequest ?: network.maxRequest,
-            maxRequestPerHost = maxRequestPerHost ?: network.maxRequestPerHost,
         )
     }
 
@@ -158,10 +150,13 @@ public class ZetaHttpClientBuilder(private val baseUrl: String = "") {
      * Set the client log verbosity used for request/response monitoring.
      *
      * @param level Desired [LogLevel] (e.g., [LogLevel.NONE], [LogLevel.INFO], [LogLevel.HEADERS], [LogLevel.BODY]).
-     * @param logProvider Desired [Logger] ( default: [Logger.Default]).
      * @return This builder for chaining.
      */
-    public fun logging(level: LogLevel, logProvider: Logger = Logger.DEFAULT): ZetaHttpClientBuilder = apply {
+    public fun logging(level: LogLevel = LogLevel.ALL): ZetaHttpClientBuilder = apply {
+        monitoring = monitoring.copy(logLevel = level)
+    }
+
+    internal fun logging(level: LogLevel, logProvider: Logger): ZetaHttpClientBuilder = apply {
         monitoring = monitoring.copy(logLevel = level, logProvider = logProvider)
     }
 
@@ -217,10 +212,9 @@ public class ZetaHttpClientBuilder(private val baseUrl: String = "") {
      * Needed for the internal calls to the PDP endpoints
      *
      * Delegates to the internal `zetaHttpClient { ... }` factory to construct and wire the client.
-     * @param addExtras Lambda to add extra custom configuration.
      * @return A ready-to-use [HttpClient] instance.
      */
-    public fun build(newUrl: String): ZetaHttpClient {
+    public open fun build(newUrl: String): ZetaHttpClient {
         return zetaHttpClient(
             configure = {
                 this.baseUrlOverride = newUrl

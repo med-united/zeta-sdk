@@ -33,4 +33,5 @@ sealed interface FlowNeed {
     object ClientRegistration : FlowNeed
     object Authentication : FlowNeed
     object Asl : FlowNeed
+    data class Retry(val delayMs: Long) : FlowNeed
 }

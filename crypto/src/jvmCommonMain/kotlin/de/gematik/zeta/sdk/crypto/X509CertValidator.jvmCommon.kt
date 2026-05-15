@@ -24,6 +24,11 @@
 
 package de.gematik.zeta.sdk.crypto
 
+import org.bouncycastle.asn1.ASN1Sequence
+import org.bouncycastle.asn1.isismtt.ISISMTTObjectIdentifiers
+import org.bouncycastle.asn1.isismtt.x509.AdmissionSyntax
+import org.bouncycastle.asn1.x509.GeneralName
+import org.bouncycastle.cert.X509CertificateHolder
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security
 import java.security.cert.CertPathValidator
@@ -33,6 +38,7 @@ import java.security.cert.TrustAnchor
 import java.security.cert.X509Certificate
 
 actual class X509CertValidator actual constructor() {
+
     init {
         if (Security.getProvider("BC") == null) {
             Security.addProvider(BouncyCastleProvider())
@@ -48,9 +54,19 @@ actual class X509CertValidator actual constructor() {
         parse(certDer).checkValidity()
     }
 
-    actual fun getExtendedKeyUsage(certDer: ByteArray): List<String> =
-        parse(certDer).extendedKeyUsage ?: emptyList()
+    actual fun getProfessionOids(certDer: ByteArray): List<String> {
+        val holder = X509CertificateHolder(certDer)
+        val ext = holder.extensions?.getExtension(ISISMTTObjectIdentifiers.id_isismtt_at_admission)
+            ?: return emptyList()
 
+        val admission = AdmissionSyntax.getInstance(
+            ASN1Sequence.getInstance(ext.parsedValue),
+        )
+
+        return admission.contentsOfAdmissions
+            .flatMap { it.professionInfos.toList() }
+            .flatMap { it.professionOIDs?.map { oid -> oid.id } ?: emptyList() }
+    }
     actual fun getPublicKey(certDer: ByteArray): ByteArray =
         parse(certDer).publicKey.encoded
 
@@ -73,4 +89,9 @@ actual class X509CertValidator actual constructor() {
         val certPath = cf.generateCertPath(chainDer.map { parse(it) })
         CertPathValidator.getInstance("PKIX", "BC").validate(certPath, params)
     }
+
+    actual fun getSanDnsNames(certDer: ByteArray): List<String> = parse(certDer).subjectAlternativeNames
+        ?.filter { it[0] == GeneralName.dNSName }
+        ?.map { it[1] as String }
+        ?: emptyList()
 }

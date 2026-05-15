@@ -25,7 +25,6 @@
 package de.gematik.zeta.driver.model
 
 import de.gematik.zeta.driver.DISABLE_SERVER_VALIDATION
-import de.gematik.zeta.driver.logger
 import de.gematik.zeta.driver.newSdk
 import de.gematik.zeta.logging.Log
 import de.gematik.zeta.sdk.ZetaSdkClient
@@ -46,11 +45,10 @@ public data class SdkInstance(
     internal val client: ZetaSdkClient = newSdk(store, config)
     val httpClient: ZetaHttpClient by lazy {
         client.httpClient {
-            logging(LogLevel.ALL, logger)
+            logging(LogLevel.ALL)
             disableServerValidation(
                 "true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()),
             )
-            dispatcher(300, 300)
         }
     }
 }
@@ -73,6 +71,8 @@ public data class SdkInstanceConfig(
     public val smcbWorkspaceId: String = "",
     public val aslProdEnv: Boolean = true,
     public val poppToken: String = "",
+    public val disableTlsVerification: Boolean = false,
+    public val requiredOid: String = "",
 ) {
     public companion object Companion {
         public fun fromEnv(): SdkInstanceConfig {
@@ -90,6 +90,8 @@ public data class SdkInstanceConfig(
                 smcbWorkspaceId = System.getenv("SMCB_WORKSPACE_ID") ?: "",
                 aslProdEnv = System.getenv("ASL_PROD")?.toBoolean() ?: true,
                 poppToken = System.getenv("POPP_TOKEN") ?: "",
+                disableTlsVerification = "true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()),
+                requiredOid = System.getenv("REQUIRED_ROLE_OID") ?: "",
             )
         }
 
@@ -123,6 +125,8 @@ public data class SdkInstanceConfig(
                     smcbWorkspaceId = props.getProperty("SMCB_WORKSPACE_ID_1") ?: "",
                     aslProdEnv = props.getProperty("ASL_PROD_1")?.toBoolean() ?: true,
                     poppToken = props.getProperty("POPP_TOKEN_1") ?: "",
+                    disableTlsVerification = props.getProperty("DISABLE_SERVER_VALIDATION_1")?.toBoolean() ?: false,
+                    requiredOid = props.getProperty("REQUIRED_ROLE_OID_1"),
                 )
             } else {
                 Log.i { "Loading test driver configuration from environment variables" }

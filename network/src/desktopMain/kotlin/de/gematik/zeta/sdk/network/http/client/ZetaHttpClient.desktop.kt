@@ -46,6 +46,7 @@ import io.ktor.client.engine.curl.tls.TlsSessionData
 import io.ktor.client.engine.curl.tls.TlsValidationConfig
 import io.ktor.client.engine.http
 import io.ktor.client.plugins.websocket.WebSockets
+import kotlinx.coroutines.runBlocking
 import kotlin.time.Clock
 internal actual fun buildPlatformClient(cfg: ClientConfig, commonSetup: HttpClientConfig<*>.() -> Unit): HttpClient =
     HttpClient(Curl) {
@@ -59,12 +60,13 @@ internal actual fun buildPlatformClient(cfg: ClientConfig, commonSetup: HttpClie
 
 private fun CurlClientEngineConfig.applyTlsConfig(security: SecurityConfig) {
     sslVerify = !security.disableServerValidation
+    sslVerifyStatus = false
     security.additionalCaFile?.let { caInfo = it }
     sslVersion = SslVersion.TLS_1_2
     sslCipherList = ZetaCipherSuites.FULL_PREFERRED_ORDER.joinToString(":")
     tls13Ciphers = ZetaCipherSuites.TLS_1_3_SUITES.joinToString(":")
     sslEcCurves = ZetaTlsCurves.ALLOWED.joinToString(":")
-    sslSignatureAlgorithms = ZetaSignatureAlgorithms.ALLOWED_WITH_RSA.joinToString(":")
+    sslSignatureAlgorithms = ZetaSignatureAlgorithms.ALLOWED.joinToString(":")
 
     if (!security.disableServerValidation) {
         tlsValidationConfig = TlsValidationConfig(onSessionValidated = ::validateSession)
@@ -75,9 +77,17 @@ private fun validateSession(sessionData: TlsSessionData) {
     val tlsResult = ZetaTlsValidator.validateHandshake(
         negotiatedCipher = sessionData.cipherSuite!!,
         negotiatedProtocol = sessionData.protocol!!,
+        negotiatedCurve = sessionData.leafCertInfo?.curveName,
     )
+
+    val negotiatedCurve = sessionData.leafCertInfo?.curveName
+    if (negotiatedCurve != null && negotiatedCurve !in ZetaTlsCurves.ALLOWED) {
+        Log.e { "Handshake failed: curve $negotiatedCurve not in allowed list ${ZetaTlsCurves.ALLOWED}" }
+        error("TLS compliance failure: negotiated curve $negotiatedCurve is not allowed")
+    }
+
     val certResult = sessionData.leafCertInfo?.let {
-        ZetaCertificateValidator.validate(it.toZetaCertInfo(), Clock.System.now().epochSeconds)
+        ZetaCertificateValidator.validate(it.toZetaCertInfo(), Clock.System.now().epochSeconds, sessionData.host)
     }
 
     val errors = tlsResult.errors + (certResult?.errors ?: emptyList())
@@ -89,6 +99,24 @@ private fun validateSession(sessionData: TlsSessionData) {
     }
 
     tlsResult.warnings.forEach { Log.w { "ZetaTls: $it" } }
+
+    sessionData.leafCertInfo?.let { leaf ->
+        val certDer = leaf.certDer ?: return@let
+        val issuerDer = leaf.issuerDer ?: return@let
+        try {
+            runBlocking {
+                RevocationChecker().checkRevocation(
+                    certDer = certDer,
+                    issuerDer = issuerDer,
+                )
+            }
+        } catch (e: CertificateRevokedException) {
+            error("Certificate revoked: ${e.message}")
+        } catch (e: Exception) {
+            Log.e { "Revocation check unavailable: ${e.message}" }
+            error("Revocation check failed: ${e.message}")
+        }
+    }
 }
 
 private fun CurlClientEngineConfig.applyProxyConfig(proxyConfig: ProxyConfig?) {
@@ -113,8 +141,9 @@ internal fun LeafCertInfo.toZetaCertInfo() = ZetaCertInfo(
     keyAlgorithm = keyTypeName ?: "",
     keySize = keyBits ?: 0,
     curveName = curveName,
-    notBefore = notBefore ?: 0L,
+    notBefore = notBefore ?: error("Missing notBefore in leaf cert - rejecting"),
     notAfter = notAfter ?: Long.MAX_VALUE,
+    san = san ?: error("Missing SAN in leaf cert - rejecting"),
 )
 
 private fun String.toCanonicalSigAlgName(): String = when (
@@ -124,21 +153,11 @@ private fun String.toCanonicalSigAlgName(): String = when (
         .replace("/", "")
         .replace(" ", "")
 ) {
-    "RSASHA256", "SHA256WITHRSA", "SHA256WITHRSAENCRYPTION" -> "SHA256WITHRSA"
-
-    "RSASHA384", "SHA384WITHRSA", "SHA384WITHRSAENCRYPTION" -> "SHA384WITHRSA"
-
-    "RSASHA512", "SHA512WITHRSA", "SHA512WITHRSAENCRYPTION" -> "SHA512WITHRSA"
-
     "ECDSASHA256", "ECDSAWITHSHA256", "SHA256WITHECDSA" -> "SHA256WITHECDSA"
 
     "ECDSASHA384", "ECDSAWITHSHA384", "SHA384WITHECDSA" -> "SHA384WITHECDSA"
 
     "ECDSASHA512", "ECDSAWITHSHA512", "SHA512WITHECDSA" -> "SHA512WITHECDSA"
-
-    "RSASSAPSS", "SHA256WITHRSAANDMGF1", "SHA256WITHRSSPSS",
-    "SHA256WITHRSAPSS", "RSAPSS",
-    -> "SHA256WITHRSAANDMGF1"
 
     else -> this
 }

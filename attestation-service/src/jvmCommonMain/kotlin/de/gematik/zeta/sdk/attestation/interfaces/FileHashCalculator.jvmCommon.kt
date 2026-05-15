@@ -25,15 +25,16 @@
 package de.gematik.zeta.sdk.attestation.interfaces
 
 actual object FileHashCalculator {
+    const val NOT_IN_SCOPE_TARGET = "The JVM target is not in scope of the Attestation Service"
     actual fun calculateSHA256(filePath: String): String {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun computeExpectedPcr(hash: ByteArray): ByteArray {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun computeMasterHash(fileHashes: Map<String, String?>): ByteArray {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 }

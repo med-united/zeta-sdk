@@ -54,7 +54,7 @@ class ResponseEvaluatorImplTest {
         val resp = responseWith(HttpStatusCode.OK)
 
         // Act
-        val directive = evaluator.evaluate(resp.call, dummyCtx)
+        val directive = evaluator.evaluate(resp.call, dummyCtx, FlowOrchestrator.RetryState())
 
         // Assert
         assertIs<FlowDirective.Proceed>(directive)
@@ -71,7 +71,7 @@ class ResponseEvaluatorImplTest {
         val resp = responseWith(HttpStatusCode.NotFound)
 
         // Act
-        val directive = evaluator.evaluate(resp.call, FlowContextImpl("", FakeForwardingClient(), storage))
+        val directive = evaluator.evaluate(resp.call, FlowContextImpl("", FakeForwardingClient(), storage), FlowOrchestrator.RetryState())
 
         // Assert
         assertIs<FlowDirective.Abort>(directive)

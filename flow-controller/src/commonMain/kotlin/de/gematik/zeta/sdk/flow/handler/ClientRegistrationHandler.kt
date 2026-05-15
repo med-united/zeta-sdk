@@ -38,7 +38,7 @@ import de.gematik.zeta.sdk.tpm.TpmProvider
 import kotlinx.coroutines.delay
 
 @Suppress("UnusedPrivateProperty")
-class ClientRegistrationHandler(
+open class ClientRegistrationHandler(
     private val clientName: String,
     private val regApi: ClientRegistrationApi,
     private val tpmProvider: TpmProvider,

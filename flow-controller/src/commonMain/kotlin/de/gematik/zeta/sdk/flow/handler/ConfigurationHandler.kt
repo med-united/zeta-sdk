@@ -64,19 +64,26 @@ class ConfigurationHandler(
         ctx: FlowContext,
     ): CapabilityResult {
         return try {
+            Log.i { "[SDK-DISCOVER] getting context" }
             val storage = ctx.configurationStorage
 
             if (isMetadataAvailable(ctx.resource, storage)) {
+                Log.i { "[SDK-DISCOVER] metadata is available" }
                 return CapabilityResult.Done
             }
 
+            Log.i { "[SDK-DISCOVER] loading protected resource metadata" }
             val protectedResourceMetadata = getProtectedResource(ctx.resource, storage)
+            Log.i { "[SDK-DISCOVER] loading auth server metadata" }
             val authorizationMetadata = getAuthorizationMetadata(protectedResourceMetadata.authorizationServers, storage)
 
+            Log.i { "[SDK-DISCOVER] validating scopes" }
             validateScopes(authConfig.scopes, authorizationMetadata.scopesSupported)
 
+            Log.i { "[SDK-DISCOVER] linking resource to auth metadata" }
             storage.linkResourceToAuthorizationServer(ctx.resource, authorizationMetadata)
 
+            Log.i { "[SDK-DISCOVER] DONE" }
             CapabilityResult.Done
         } catch (e: ServiceDiscoveryException) {
             CapabilityResult.Error(SERVICE_DISCOVERY_ERROR_CODE, e.message.toString(), e.response)
@@ -99,11 +106,16 @@ class ConfigurationHandler(
         resourceUrl: String,
         storage: ConfigurationStorage,
     ): ProtectedResourceMetadata {
+        Log.i { "[ZETA-SDK] call getProtectedResource from storage:  $resourceUrl" }
         storage.getProtectedResource(resourceUrl)?.let { return it }
 
+        Log.i { "[ZETA-SDK] call getProtectedResource from api:  $resourceUrl" }
         val prJson = configurationApi.fetchResourceMetadata(resourceUrl)
-        // validateOrThrow(WellKnownTypes.RESOURCE_METADATA, prJson, configurationApi.getResourceSchema())
 
+        Log.i { "[ZETA-SDK] validate resource metadata for json:  $prJson" }
+        validateOrThrow(WellKnownTypes.RESOURCE_METADATA, prJson, configurationApi.getResourceSchema())
+
+        Log.i { "[ZETA-SDK] persist json:  $prJson" }
         return storage.saveProtectedResource(prJson)
     }
 
@@ -127,7 +139,7 @@ class ConfigurationHandler(
         if (cachedMatch != null) return cachedMatch
 
         val asJson = configurationApi.fetchAuthorizationMetadata(authServers.first())
-        // validateOrThrow(WellKnownTypes.AUTHORIZATION_METADATA, asJson, configurationApi.getAuthorizationSchema())
+        validateOrThrow(WellKnownTypes.AUTHORIZATION_METADATA, asJson, configurationApi.getAuthorizationSchema())
 
         return Json.decodeFromString(asJson)
     }
@@ -137,12 +149,12 @@ class ConfigurationHandler(
      */
     private suspend fun validateOrThrow(type: WellKnownTypes, json: String, schema: String) {
         val valid = runCatching { validator.validate(json, schema) }.getOrElse { e ->
-            Log.d { "Validation threw for $type. Reason: ${e.message}" }
+            Log.i { "[ZETA-SDK] Validation threw for $type. Reason: ${e.message}" }
             throw ConfigurationError.ValidationFailed("Validation threw for $type", e)
         }
         if (!valid) {
-            Log.d { "Failed to validate $type" }
-            throw ConfigurationError.ValidationFailed("Failed to validate $type")
+            Log.i { "[ZETA-SDK] Failed to validate $type" }
+            throw ConfigurationError.ValidationFailed("[ZETA-SDK] Failed to validate $type")
         }
     }
 

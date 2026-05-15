@@ -25,5 +25,5 @@
 package de.gematik.zeta.client.config
 
 public actual fun getConfig(key: String): String? {
-    TODO("Not yet implemented")
+    error("$key can not be resolved. Actual not implemented on iOS")
 }

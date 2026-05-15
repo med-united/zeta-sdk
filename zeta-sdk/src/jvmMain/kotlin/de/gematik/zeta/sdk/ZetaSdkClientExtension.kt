@@ -36,9 +36,23 @@ object ZetaSdkClientExtension {
     }
 
     @JvmStatic
+    fun logout(client: ZetaSdkClient): Boolean {
+        return runBlocking {
+            client.logout().isSuccess
+        }
+    }
+
+    @JvmStatic
     fun close(client: ZetaSdkClient): Boolean {
         return runBlocking {
             client.close().isSuccess
+        }
+    }
+
+    @JvmStatic
+    fun status(client: ZetaSdkClient): Result<SdkStatus> {
+        return runBlocking {
+            client.status()
         }
     }
 

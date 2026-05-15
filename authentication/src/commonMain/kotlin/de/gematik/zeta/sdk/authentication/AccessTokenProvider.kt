@@ -24,10 +24,10 @@
 
 package de.gematik.zeta.sdk.authentication
 
-import AttestationApi
-import AttestationApiImpl
 import Jwk
 import de.gematik.zeta.logging.Log
+import de.gematik.zeta.sdk.attestation.AttestationApi
+import de.gematik.zeta.sdk.attestation.AttestationApiImpl
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.model.AccessTokenRequest
 import de.gematik.zeta.sdk.authentication.model.DPoPTokenClaims
@@ -79,39 +79,39 @@ open class AccessTokenProviderImpl(
         val start = TimeSource.Monotonic.markNow()
         val (cached, cacheReadTime) = measureTimedValue { authStorage.getAccessToken(resource) }
         val (exp, expReadTime) = measureTimedValue { authStorage.getTokenExpiration(resource) }
-        Log.i { "[AUTH-TIMING] getValidToken cacheRead=$cacheReadTime expRead=$expReadTime" }
+        Log.d { "[AUTH-TIMING] getValidToken cacheRead=$cacheReadTime expRead=$expReadTime" }
 
         if (cached != null && exp != null && exp != "" && exp.toLong() - clock() > SAFETY_MARGIN_SECS) {
-            Log.i { "[AUTH-TIMING] getValidToken CACHE_HIT total=${start.elapsedNow()}" }
+            Log.d { "[AUTH-TIMING] getValidToken CACHE_HIT total=${start.elapsedNow()}" }
             return cached
         }
 
         val (refreshToken, refreshReadTime) = measureTimedValue { authStorage.getRefreshToken(resource) }
-        Log.i { "[AUTH-TIMING] getValidToken refreshTokenRead=$refreshReadTime hasRefresh=${!refreshToken.isNullOrBlank()}" }
+        Log.d { "[AUTH-TIMING] getValidToken refreshTokenRead=$refreshReadTime hasRefresh=${!refreshToken.isNullOrBlank()}" }
 
         if (!refreshToken.isNullOrBlank()) {
             return try {
-                Log.i { "Access token expired, fetching refresh token" }
+                Log.d { "Access token expired, fetching refresh token" }
                 val (token, refreshTime) = measureTimedValue {
                     refreshToken(tokenEndpoint, nonceEndpoint, params, refreshToken)
                 }
-                Log.i { "[AUTH-TIMING] getValidToken REFRESH total=${start.elapsedNow()} refreshFlow=$refreshTime" }
+                Log.d { "[AUTH-TIMING] getValidToken REFRESH total=${start.elapsedNow()} refreshFlow=$refreshTime" }
                 token
             } catch (ex: Exception) {
-                Log.i { "Refresh token failed: (${ex.message})" }
+                Log.d { "Refresh token failed: (${ex.message})" }
                 val (token, newTokenTime) = measureTimedValue {
                     issueNewAccessToken(tokenEndpoint, nonceEndpoint, params, dpopKey)
                 }
-                Log.i { "[AUTH-TIMING] getValidToken REFRESH_FAILED_NEW_TOKEN total=${start.elapsedNow()} newTokenFlow=$newTokenTime" }
+                Log.d { "[AUTH-TIMING] getValidToken REFRESH_FAILED_NEW_TOKEN total=${start.elapsedNow()} newTokenFlow=$newTokenTime" }
                 token
             }
         }
 
-        Log.i { "No refresh token found, getting new access token" }
+        Log.d { "No refresh token found, getting new access token" }
         val (token, newTokenTime) = measureTimedValue {
             issueNewAccessToken(tokenEndpoint, nonceEndpoint, params, dpopKey)
         }
-        Log.i { "[AUTH-TIMING] getValidToken NEW_TOKEN total=${start.elapsedNow()} newTokenFlow=$newTokenTime" }
+        Log.d { "[AUTH-TIMING] getValidToken NEW_TOKEN total=${start.elapsedNow()} newTokenFlow=$newTokenTime" }
         return token
     }
 
@@ -119,7 +119,7 @@ open class AccessTokenProviderImpl(
         require(refreshToken.isNotBlank())
 
         val (nonce, nonceTime) = measureTimedValue { authApi.fetchNonce(nonceEndpoint) }
-        Log.i { "[AUTH-TIMING] refreshToken fetchNonce=$nonceTime" }
+        Log.d { "[AUTH-TIMING] refreshToken fetchNonce=$nonceTime" }
         return requestAccessToken("refresh_token", tokenEndpoint, nonce, params, refreshToken)
     }
 
@@ -131,7 +131,7 @@ open class AccessTokenProviderImpl(
     ): String {
         val start = TimeSource.Monotonic.markNow()
         val (nonce, nonceTime) = measureTimedValue { authApi.fetchNonce(nonceEndpoint) }
-        Log.i { "[AUTH-TIMING] issueNewAccessToken fetchNonce=$nonceTime" }
+        Log.d { "[AUTH-TIMING] issueNewAccessToken fetchNonce=$nonceTime" }
 
         val subjectToken = suspend {
             val (token, subjectTime) = measureTimedValue {
@@ -145,7 +145,7 @@ open class AccessTokenProviderImpl(
                     tpmProvider,
                 )
             }
-            Log.i { "[AUTH-TIMING] issueNewAccessToken createSubjectToken=$subjectTime" }
+            Log.d { "[AUTH-TIMING] issueNewAccessToken createSubjectToken=$subjectTime" }
             token
         }
 
@@ -159,7 +159,7 @@ open class AccessTokenProviderImpl(
                 subjectTokenType = "urn:ietf:params:oauth:token-type:jwt",
             )
         }
-        Log.i { "[AUTH-TIMING] issueNewAccessToken requestAccessToken=$requestTime total=${start.elapsedNow()}" }
+        Log.d { "[AUTH-TIMING] issueNewAccessToken requestAccessToken=$requestTime total=${start.elapsedNow()}" }
         return result
     }
 
@@ -186,14 +186,14 @@ open class AccessTokenProviderImpl(
                     params.platformProductId,
                 )
             }
-            Log.i { "[AUTH-TIMING][$requestId] requestAccessToken createClientAssertion=$assertionTime" }
+            Log.d { "[AUTH-TIMING][$requestId] requestAccessToken createClientAssertion=$assertionTime" }
 
-            val dpopKey = tpmProvider.generateDpopKey()
+            val dpopKey = tpmProvider.generateDpopKey(resource)
             val (dpop, dpopTime) = measureTimedValue { createDpopToken(dpopKey.jwk, "POST", tokenEndpoint, nonce) }
-            Log.i { "[AUTH-TIMING][$requestId] requestAccessToken createDpopToken=$dpopTime" }
+            Log.d { "[AUTH-TIMING][$requestId] requestAccessToken createDpopToken=$dpopTime" }
 
             val (subjectTokenValue, subjectTokenTime) = measureTimedValue { subjectToken() }
-            Log.i { "[AUTH-TIMING][$requestId] requestAccessToken subjectToken=$subjectTokenTime" }
+            Log.d { "[AUTH-TIMING][$requestId] requestAccessToken subjectToken=$subjectTokenTime" }
 
             val request = AccessTokenRequest(
                 grantType = grantType,
@@ -208,17 +208,17 @@ open class AccessTokenProviderImpl(
             )
 
             val sendEpoch = clock()
-            Log.i { "[AUTH-TIMING][$requestId] requestAccessToken sending_http epoch=$sendEpoch monotonic=${start.elapsedNow()}" }
+            Log.d { "[AUTH-TIMING][$requestId] requestAccessToken sending_http epoch=$sendEpoch monotonic=${start.elapsedNow()}" }
 
             val (resp, httpTime) = measureTimedValue { authApi.requestAccessToken(tokenEndpoint, request, dpop) }
 
             val recvEpoch = clock()
-            Log.i { "[AUTH-TIMING][$requestId] requestAccessToken received_http epoch=$recvEpoch httpTime=$httpTime" }
+            Log.d { "[AUTH-TIMING][$requestId] requestAccessToken received_http epoch=$recvEpoch httpTime=$httpTime" }
 
             val (_, saveTime) = measureTimedValue {
                 authStorage.saveAccessTokens(resource, resp.accessToken, resp.refreshToken, clock() + resp.expiresIn)
             }
-            Log.i { "[AUTH-TIMING][$requestId] requestAccessToken saveTokens=$saveTime total=${start.elapsedNow()}" }
+            Log.d { "[AUTH-TIMING][$requestId] requestAccessToken saveTokens=$saveTime total=${start.elapsedNow()}" }
 
             return resp.accessToken
         } catch (e: AuthenticationException) {
@@ -233,7 +233,7 @@ open class AccessTokenProviderImpl(
         val now = clock()
         val jti = tpmProvider.randomUuid().toHexDashString()
         val htu = url.applyHtuRules()
-        val nonce = nonceBytes?.let { Base64.encode(nonceBytes) }
+        val nonce = nonceBytes?.let { Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).encode(nonceBytes) }
 
         val token = AccessTokenUtility.create(
             DPopTokenHeader(
@@ -251,7 +251,7 @@ open class AccessTokenProviderImpl(
             ),
         )
         val (signed, signTime) = measureTimedValue { signDpopToken(token) }
-        Log.i { "[AUTH-TIMING] createDpopToken signDpopToken=$signTime total=${start.elapsedNow()}" }
+        Log.d { "[AUTH-TIMING] createDpopToken signDpopToken=$signTime total=${start.elapsedNow()}" }
         return AccessTokenUtility.addSignature(token, signed)
     }
 
@@ -264,12 +264,12 @@ open class AccessTokenProviderImpl(
                 .withPadding(Base64.PaddingOption.ABSENT)
                 .encode(hashedToken)
         }
-        Log.i { "[AUTH-TIMING] hash=$hashTime" }
+        Log.d { "[AUTH-TIMING] hash=$hashTime" }
         return result
     }
 
     private suspend fun signDpopToken(token: String): String {
-        val signature = tpmProvider.signWithDpopKey(token.toByteArray())
+        val signature = tpmProvider.signWithDpopKey(token.toByteArray(), resource)
         return Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).encode(signature)
     }
 

@@ -1,6 +1,4 @@
 import de.gematik.zeta.sdk.buildlogic.isAndroidEnabled
-import de.gematik.zeta.sdk.buildlogic.isIOSEnabled
-import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 
 plugins {
@@ -22,27 +20,14 @@ setupBuildLogic {
             api(libs.serialization.json)
         }
 
+        sourceSets.commonTest.dependencies {
+            api(kotlin("test"))
+            api(libs.coroutines.test)
+        }
+
         if (project.isAndroidEnabled) {
             sourceSets.androidMain.dependencies {
                 api(libs.androidx.startup)
-            }
-        }
-
-        if (project.isJvmEnabled) {
-            sourceSets["jvmCommonMain"].dependencies {
-                implementation(libs.logger.slf4j.simple)
-            }
-        }
-
-        if (project.isAndroidEnabled) {
-            kotlin.sourceSets.getByName("androidMain").dependencies {
-                implementation(libs.logger.napier)
-            }
-        }
-
-        if (project.isIOSEnabled) {
-            kotlin.sourceSets.getByName("iosMain").dependencies {
-                implementation(libs.logger.napier)
             }
         }
 

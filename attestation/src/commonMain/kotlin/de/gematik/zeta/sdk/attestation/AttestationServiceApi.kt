@@ -134,7 +134,6 @@ class AttestationServiceApi(
         val actualHash: String?,
         val isValid: Boolean,
     )
-
     private suspend fun connectToStatusWebSocket(endpoint: String) {
         try {
             zetaHttpClient.webSocket(request = {
@@ -142,40 +141,10 @@ class AttestationServiceApi(
                 header(HttpHeaders.Accept, "application/json")
             }) {
                 for (frame in incoming) {
-                    when (frame) {
-                        is Frame.Text -> {
-                            val response = Json.decodeFromString<VerifyIntegrityResponse>(frame.readText())
-                            when {
-                                response.success -> {
-                                    Log.d { "Integrity check passed" }
-                                    updateStatus(AttestationStatus.OK)
-                                }
-
-                                else -> {
-                                    val failedFiles = response.results
-                                        .filter { !it.value.isValid }
-                                        .map { it.key }
-
-                                    val reason = buildString {
-                                        append("Integrity check failed for ${failedFiles.size} file(s): ")
-                                        append(failedFiles.joinToString(", ") { it.substringAfterLast('/') })
-                                    }
-
-                                    Log.w { reason }
-                                    response.results.forEach { (path, result) ->
-                                        if (!result.isValid) {
-                                            Log.w { "$path: expected=${result.expectedHash?.take(16)}..., actual=${result.actualHash?.take(16)}..." }
-                                        }
-                                    }
-
-                                    updateStatus(AttestationStatus.KO(reason))
-                                }
-                            }
-                        }
-
-                        else -> {
-                            Log.i { "Ignoring other frames" }
-                        }
+                    if (frame is Frame.Text) {
+                        handleTextFrame(frame)
+                    } else {
+                        Log.i { "Ignoring other frames" }
                     }
                 }
             }
@@ -185,6 +154,31 @@ class AttestationServiceApi(
             delay(5000)
             connectToStatusWebSocket(endpoint)
         }
+    }
+
+    private fun handleTextFrame(frame: Frame.Text) {
+        val response = Json.decodeFromString<VerifyIntegrityResponse>(frame.readText())
+        if (response.success) {
+            Log.d { "Integrity check passed" }
+            updateStatus(AttestationStatus.OK)
+        } else {
+            Log.w { "Integrity check failed" }
+            handleIntegrityFailure(response)
+        }
+    }
+
+    private fun handleIntegrityFailure(response: VerifyIntegrityResponse) {
+        val failedFiles = response.results.filterNot { it.value.isValid }
+
+        val reason = "Integrity check failed for ${failedFiles.size} file(s): " +
+            failedFiles.keys.joinToString(", ") { it.substringAfterLast('/') }
+
+        Log.w { reason }
+        failedFiles.forEach { (path, result) ->
+            Log.w { "$path: expected=${result.expectedHash?.take(16)}..., actual=${result.actualHash?.take(16)}..." }
+        }
+
+        updateStatus(AttestationStatus.KO(reason))
     }
 
     private fun updateStatus(status: AttestationStatus) {

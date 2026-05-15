@@ -24,6 +24,7 @@
 package de.gematik.zeta;
 
 import de.gematik.zeta.logging.Log;
+import de.gematik.zeta.logging.ZetaLogLevel;
 import de.gematik.zeta.sdk.*;
 import de.gematik.zeta.sdk.attestation.model.AttestationConfig;
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId;
@@ -35,8 +36,12 @@ import de.gematik.zeta.sdk.authentication.smcb.SmcbTokenProvider;
 import de.gematik.zeta.sdk.network.http.client.HttpClientExtension;
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient;
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder;
+import de.gematik.zeta.sdk.storage.InMemoryStorage;
+import de.gematik.zeta.sdk.storage.StorageConfig;
 import io.ktor.client.plugins.logging.LogLevel;
 import kotlin.Unit;
+import kotlinx.coroutines.JobCancellationException;
+
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.URI;
@@ -81,9 +86,12 @@ public class Main {
     public static final String POPP_TOKEN = "POPP_TOKEN";
     public static final String POPP_TOKEN_HEADER_NAME = "PoPP";
     public static final String WS_SERVER_CONTEXT_PATH = "WS_SERVER_CONTEXT_PATH";
-
+    public static final String STORAGE_AES_KEY = "STORAGE_AES_KEY";
+    public static final String REQUIRED_ROLE_OID = "REQUIRED_ROLE_OID";
     public static final String WEBSOCKETS_TAG = "Websockets";
     public static final String MAIN_TAG = "Main";
+    public static final String CONNECTED =  "CONNECTED";
+
 
     /**
      * Runs the demo client with the optional properties file provided in {@code args[0]}.
@@ -98,7 +106,7 @@ public class Main {
         int exitCode = 0;
         try {
             runDemo(args);
-        } catch (Throwable t) {
+        } catch (Exception t) {
             exitCode = 1;
             Log.INSTANCE.e(t, MAIN_TAG, () -> "Demo run failed");
         }
@@ -113,6 +121,8 @@ public class Main {
      * @param args optional CLI arguments, where the first argument points to a properties file
      */
     private static void runDemo(String[] args) {
+        Log.INSTANCE.setLogLevel(ZetaLogLevel.INFO);
+
         // get the configuration properties
         String propertiesFilename = getFilenameFromArgs(args);
         Properties props = loadProperties(propertiesFilename);
@@ -128,13 +138,16 @@ public class Main {
         var argProd = getArg(props, ASL_PROD);
         boolean aslProdEnv = argProd == null || "true".equalsIgnoreCase(argProd);
         // Build the SDK once and reuse it for both the WebSocket and HTTP examples.
+
+        String requiredRoleId = getArg(props, REQUIRED_ROLE_OID);
+
         ZetaSdkClient sdkClient = ZetaSdk.INSTANCE.build(
             getFirstResourceUrl(props),
             new BuildConfig(
-                "demo-client",
-                "0.5.0",
+                "ZETA-Test-Client",
+                "1.0.0",
                 "sdk-client",
-                new StorageConfig(),
+                new StorageConfig.Custom(new InMemoryStorage()),
                 new TpmConfig() {
                 },
                 new AuthConfig(
@@ -144,10 +157,12 @@ public class Main {
                     30,
                     aslProdEnv,
                     getTokenProvider(props),
-                    AttestationConfig.software()
+                    AttestationConfig.software(),
+                    requiredRoleId
                 ),
                 getPlatformProductId(),
-                new ZetaHttpClientBuilder("").disableServerValidation(disableServerValidation).logging(LogLevel.ALL, System.out::println),
+                new ZetaHttpClientBuilder("").disableServerValidation(disableServerValidation).logging(LogLevel.ALL), // NOSONAR client not productive code
+                null,
                 null,
                 null
             ));
@@ -159,7 +174,7 @@ public class Main {
 
             // Create an HttpClient instance from the ZetaSdkClient.
             httpClient = sdkClient.httpClient(it -> {
-                it.logging(LogLevel.ALL, System.out::println);
+                it.logging(LogLevel.ALL);
                 it.disableServerValidation(disableServerValidation);
                 return Unit.INSTANCE;
             });
@@ -177,19 +192,19 @@ public class Main {
                         Log.INSTANCE.e(ex, "Http", () -> "Http Get failed");
                     }
                     else {
-                        Log.INSTANCE.i(null, "Http", () -> "Body:" + body);
+                        Log.INSTANCE.d(null, "Http", () -> "Body:" + body);
                     }
                 }).join();
         } finally {
             if (httpClient != null) {
                 httpClient.close();
             }
-            ZetaSdkClientExtension.close(sdkClient);
+            ZetaSdkClientExtension.logout(sdkClient);
         }
     }
 
     /**
-     * get the platform-specific product Id
+     * get the platform-specific productId
      * @return PlatformProductId
      */
     private static PlatformProductId getPlatformProductId() {
@@ -202,7 +217,7 @@ public class Main {
         } else if (os.contains("nux")) {
             return new PlatformProductId.LinuxProductId("linux", "storeId", "", "");
         }
-        throw new RuntimeException("Unsupported OS: " + os);
+        throw new IllegalStateException("Unsupported OS: " + os);
     }
 
     /**
@@ -225,14 +240,13 @@ public class Main {
      * @return first resource URL found in props or environment
      */
     private static String getFirstResourceUrl(Properties props) {
-
         String environments = getArg(props, ENVIRONMENTS);
         if (environments == null) {
             environments = getArg(props, FACHDIENST_URL);
         }
         if (environments == null) {
             Log.INSTANCE.e(null, MAIN_TAG, () -> "The configuration has not defined any environments / resource servers (" + ENVIRONMENTS + ")");
-            throw new RuntimeException("The configuration has not defined any environments / resource servers (" + ENVIRONMENTS + ")");
+            throw new IllegalArgumentException("The configuration has not defined any environments / resource servers (" + ENVIRONMENTS + ")");
         }
         StringTokenizer tok = new StringTokenizer(environments, " ");
         return tok.nextToken();
@@ -264,7 +278,7 @@ public class Main {
             String cartHandle = getArg(props, SMCB_CARD_HANDLE);
 
             SmcbTokenProvider.ConnectorConfig config = new SmcbTokenProvider.ConnectorConfig(connectorUrl, mandantId, clientSystemId, workplaceId, userId, cartHandle);
-            return new SmcbTokenProvider(config, new ConnectorApiImpl(config));
+            return new SmcbTokenProvider(config, new ConnectorApiImpl(config, null));
         }
         return new SmbTokenProvider(new SmbTokenProvider.Credentials("","","", ""));
     }
@@ -299,11 +313,11 @@ public class Main {
     private static Properties loadProperties(String filename) {
         Properties props = new Properties();
         if (filename != null) {
-            Log.INSTANCE.i(null, MAIN_TAG, () -> "Loading properties from '" + filename + "'");
+            Log.INSTANCE.d(null, MAIN_TAG, () -> "Loading properties from '" + filename + "'");
             try (FileInputStream input = new FileInputStream(filename)) {
                 props.load(input);
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                throw new IllegalArgumentException(e);
             }
         } else {
             Log.INSTANCE.w(null, MAIN_TAG, () -> "No name for properties file given. Expecting configuration from environment variables");
@@ -337,6 +351,8 @@ public class Main {
         int sessionCount = 3;
         List<CompletableFuture<Unit>> sessions = new ArrayList<>();
 
+        ZetaSdkClientExtension.authenticate(sdkClient);
+
         for (int i = 0; i < sessionCount; i++) {
             final int sessionId = i;
             final String tag = WEBSOCKETS_TAG + "-" + sessionId;
@@ -346,25 +362,21 @@ public class Main {
                 wsUrl,
                 builder -> {
                     builder.disableServerValidation(disableServerValidation);
-                    builder.logging(LogLevel.ALL, msg ->
-                        System.out.println("[session-" + sessionId + "] " + msg));
+                    builder.logging(LogLevel.ALL);
                     return Unit.INSTANCE;
                 },
                 headers,
                 session -> runSessionWorkflow(session, host, contextPath, sessionId, tag)
             ).handle((res, ex) -> {
                 if (isExpectedCloseCancellation(ex)) {
-                    Log.INSTANCE.i(null, WEBSOCKETS_TAG, () ->
-                        "[session-" + sessionId + "] Finished after expected close");
+                    Log.INSTANCE.d(null, WEBSOCKETS_TAG, () -> sessionTag(sessionId) + "Finished after expected close");
                     return Unit.INSTANCE;
                 }
                 if (ex != null) {
-                    Log.INSTANCE.e(ex, WEBSOCKETS_TAG, () ->
-                        "[session-" + sessionId + "] Failed");
+                    Log.INSTANCE.e(ex, WEBSOCKETS_TAG, () -> sessionTag(sessionId) + "Failed");
                     throw new CompletionException(ex);
                 }
-                Log.INSTANCE.i(null, WEBSOCKETS_TAG, () ->
-                    "[session-" + sessionId + "] Finished");
+                Log.INSTANCE.d(null, WEBSOCKETS_TAG, () -> sessionTag(sessionId) + "Finished");
                 return res;
             });
 
@@ -381,6 +393,10 @@ public class Main {
                 }
             })
             .join();
+    }
+
+    private static String sessionTag(int sessionId) {
+        return "[session-" + sessionId + "] ";
     }
 
     /**
@@ -402,14 +418,14 @@ public class Main {
                 wsUrl,
                 builder -> {
                     builder.disableServerValidation(disableServerValidation);
-                    builder.logging(LogLevel.ALL, System.out::println);
+                    builder.logging(LogLevel.ALL); // NOSONAR client not productive code
                     return Unit.INSTANCE;
                 },
                 headers,
                 session -> runSessionWorkflow(session, host, contextPath, 0, WEBSOCKETS_TAG)
             ).handle((res, ex) -> {
                 if (isExpectedCloseCancellation(ex)) {
-                    Log.INSTANCE.i(null, WEBSOCKETS_TAG, () -> "WebSocket finished after expected close");
+                    Log.INSTANCE.d(null, WEBSOCKETS_TAG, () -> "WebSocket finished after expected close");
                     return Unit.INSTANCE;
                 }
                 if (ex != null) {
@@ -443,7 +459,7 @@ public class Main {
         awaitConnected(events, tag);
         session.sendTextAsync(stompSubscribeFrame("sub-1", contextPath + "/topic/erezept")).join();
         session.sendTextAsync(stompSubscribeFrame("sub-2", contextPath + "/user/queue/erezept")).join();
-        Log.INSTANCE.i(null, tag, () -> "Connected + subscribed");
+        Log.INSTANCE.d(null, tag, () -> "Connected + subscribed");
         return CompletableFuture.completedFuture(Unit.INSTANCE);
     }
 
@@ -473,7 +489,7 @@ public class Main {
         session.sendTextAsync(stompSendFrame(contextPath + "/app/erezept.create", createBody)).join();
         StompFrame createResponse = awaitQueueMessage(events, contextPath, tag, "create");
         long createdId = extractNumericId(createResponse.body);
-        Log.INSTANCE.i(null, tag, () ->
+        Log.INSTANCE.d(null, tag, () ->
             "Create response returned id=" + createdId + " for prescriptionId=" + prescriptionId);
 
         session.sendTextAsync(stompSendFrame(contextPath + "/app/erezept.read." + createdId, "{}")).join();
@@ -527,9 +543,9 @@ public class Main {
      * @param tag logger tag for the current session
      */
     private static void awaitConnected(BlockingQueue<StompEvent> events, String tag) {
-        StompFrame connected = awaitFrame(events, tag, "CONNECTED", frame ->
-            "CONNECTED".equals(frame.command));
-        Log.INSTANCE.i(null, tag, () -> "STOMP connected: " + connected.command);
+        StompFrame connected = awaitFrame(events, tag, CONNECTED, frame ->
+            CONNECTED.equals(frame.command));
+        Log.INSTANCE.d(null, tag, () -> "STOMP connected: " + connected.command);
     }
 
     /**
@@ -589,14 +605,14 @@ public class Main {
                 event = events.poll(1, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("Interrupted while waiting for " + waitLabel, e);
+                throw new IllegalStateException("Interrupted while waiting for " + waitLabel, e);
             }
 
             if (event == null) {
                 continue;
             }
             if (event.error != null) {
-                throw new RuntimeException("WebSocket session failed while waiting for " + waitLabel, event.error);
+                throw new IllegalStateException("WebSocket session failed while waiting for " + waitLabel, event.error);
             }
             if (event.closed) {
                 throw new IllegalStateException("WebSocket closed while waiting for " + waitLabel);
@@ -607,7 +623,7 @@ public class Main {
             if (predicate.test(event.frame)) {
                 return event.frame;
             }
-            Log.INSTANCE.i(null, tag, () ->
+            Log.INSTANCE.d(null, tag, () ->
                 "Ignoring STOMP frame while waiting for " + waitLabel + ": "
                     + event.frame.command + " "
                     + event.frame.headers.getOrDefault("destination", ""));
@@ -686,7 +702,7 @@ public class Main {
     private static boolean isExpectedCloseCancellation(Throwable throwable) {
         Throwable current = throwable;
         while (current != null) {
-            if ("kotlinx.coroutines.JobCancellationException".equals(current.getClass().getName())) {
+            if (current instanceof JobCancellationException) {
                 return true;
             }
             current = current.getCause();
@@ -752,7 +768,7 @@ public class Main {
         try {
             return new URI(url).getHost();
         } catch (URISyntaxException e) {
-            throw new RuntimeException(e);
+            throw new IllegalArgumentException(e);
         }
     }
 
@@ -784,7 +800,7 @@ public class Main {
 
         @Override
         public void onText(String text) {
-            Log.INSTANCE.i(null, tag, () -> text.startsWith("CONNECTED") ? text : "Frame:\n" + text);
+            Log.INSTANCE.d(null, tag, () -> text.startsWith(CONNECTED) ? text : "Frame:\n" + text);
             StompFrame frame = parseStompFrame(text);
             if (frame != null) {
                 events.offer(StompEvent.frame(frame));
@@ -793,7 +809,7 @@ public class Main {
 
         @Override
         public void onBinary(byte[] bytes) {
-            Log.INSTANCE.i(null, tag, () -> "Binary: " + bytes.length + " bytes");
+            Log.INSTANCE.d(null, tag, () -> "Binary: " + bytes.length + " bytes");
         }
 
         @Override
@@ -851,5 +867,3 @@ public class Main {
         }
     }
 }
-
-

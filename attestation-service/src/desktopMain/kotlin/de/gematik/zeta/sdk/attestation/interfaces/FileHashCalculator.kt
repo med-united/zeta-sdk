@@ -32,7 +32,7 @@ import okio.HashingSink
 import okio.Path.Companion.toPath
 import okio.blackholeSink
 import okio.buffer
-import okio.use
+import okio.use // NOSONAR false positive. Is required to compile
 
 actual object FileHashCalculator {
     actual fun calculateSHA256(filePath: String): String {

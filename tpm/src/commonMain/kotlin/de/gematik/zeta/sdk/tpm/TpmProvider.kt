@@ -38,34 +38,42 @@ interface TpmProvider {
     /** Returns the client instance public key. */
     suspend fun getOrGenerateClientInstancePublicKey(): PublicKeyOut
 
-    /** Create a new DPoP key pair and return the public key. */
-    suspend fun generateDpopKey(): PublicKeyOut
+    /**
+     * Returns the DPoP key pair for the given [resource], generating and
+     * persisting one if it does not exist yet.
+     */
+    suspend fun generateDpopKey(resource: String): PublicKeyOut
 
-    /** Sign a hashed digest using the client key private behind. */
+    /** Sign a hashed digest using the client instance private key. */
     suspend fun signWithClientKey(input: ByteArray): ByteArray
 
-    /** Sign a hashed digest using the client key of DPoP behind. */
-    suspend fun signWithDpopKey(input: ByteArray): ByteArray
+    /** Sign a hashed digest using the DPoP private key bound to [resource]. */
+    suspend fun signWithDpopKey(input: ByteArray, resource: String): ByteArray
 
-    /** Get SM-B x509  */
+    /** Load SM-B x509 certificate from a file path. */
     suspend fun readSmbCertificate(p12File: String, alias: String, password: String): ByteArray
 
-    /** Get SM-B x509 certificate */
+    /** Load SM-B x509 certificate from raw bytes. */
     suspend fun readSmbCertificateFromBytes(data: ByteArray, alias: String, password: String): ByteArray
 
-    /** Sign a hashed digest using the SM-B key private behind. */
+    /** Sign using the SM-B private key loaded from a file path. */
     suspend fun signWithSmbKey(input: ByteArray, p12File: String, alias: String, password: String): ByteArray
 
+    /** Sign using the SM-B private key loaded from raw bytes. */
     suspend fun signWithSmbKeyFromBytes(input: ByteArray, keystoreBytes: ByteArray, alias: String, password: String): ByteArray
 
-    /** Generate random UUID */
+    /** Generate a random UUID. */
     suspend fun randomUuid(): Uuid
 
-    /** Get registration number from SM-B x509 certificate */
+    /** Extract registration number from an SM-B x509 certificate. */
     suspend fun getRegistrationNumber(certificate: ByteArray): String
 
-    /** Sets to null the client and the DPoP keys. */
-    fun forget()
+    /**
+     * Clears the in-memory client key.
+     * If [resource] is provided, also deletes the DPoP key for that resource
+     * from storage. If null, clears all DPoP state.
+     */
+    suspend fun forget(resource: String? = null)
 }
 
 /** Platform chooses the best default provider (HW if available, otherwise software). */
@@ -75,10 +83,6 @@ expect fun platformDefaultProvider(storage: TpmStorage): TpmProvider
 object Tpm {
     @Volatile
     private var provider: TpmProvider? = null
-
-    fun configure(p: TpmProvider) {
-        provider = p
-    }
 
     fun provider(storage: TpmStorage): TpmProvider =
         provider ?: platformDefaultProvider(storage).also { provider = it }

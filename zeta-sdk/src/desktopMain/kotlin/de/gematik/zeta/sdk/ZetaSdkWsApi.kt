@@ -23,31 +23,9 @@
  */
 
 @file:OptIn(ExperimentalNativeApi::class, ExperimentalForeignApi::class)
-@file:Suppress("FunctionNaming")
-/*
- * #%L
- * ZETA-Client
- * %%
- * (C) EY Strategy & Transactions GmbH, 2025, licensed for gematik GmbH
- * %%
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- * ******
- *
- * For additional notes and disclaimer from gematik and in case of changes by gematik find details in the "Readme" file.
- * #L%
- */
-
+@file:Suppress("FunctionNaming", "ReplaceGetOrSet")
+// ReplaceGetOrSet is suppressed globally in this file because StableRef<>.get()
+// cannot be replaced with the [] operator as it is not available on StableRef
 package de.gematik.zeta.sdk
 
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
@@ -130,7 +108,7 @@ fun ZetaSdk_Client_ws(
         zetaHttpClient.ws(
             targetUrl = targetUrl,
             builder = {
-                disableServerValidation(true)
+                disableServerValidation(disableServerValidation)
             },
             block = {
                 val cWsSession = nativeHeap.alloc<ZetaSdk_WSSession>().let { cSession ->
@@ -175,6 +153,7 @@ fun ZetaSdk_WSSession_receiveNext(
                         val buf = nativeHeap.allocArray<ByteVar>(bytes.size + 1)
                         bytes.forEachIndexed { i, b -> buf[i] = b }
                         buf[bytes.size] = 0
+                        cWsMessage.data.text.size = bytes.size
                         cWsMessage.data.text.text = buf
                     }.ptr
                 }

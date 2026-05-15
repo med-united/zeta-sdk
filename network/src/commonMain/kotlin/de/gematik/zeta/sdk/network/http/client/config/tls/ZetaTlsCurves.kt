@@ -25,15 +25,20 @@
 package de.gematik.zeta.sdk.network.http.client.config.tls
 
 public object ZetaTlsCurves {
-    public const val X25519: String = "x25519"
     public const val P256: String = "secp256r1"
+    public const val P256_ALIAS: String = "prime256v1"
+    public const val P256_IANA: String = "P-256"
     public const val P384: String = "secp384r1"
+    public const val P384_IANA: String = "P-384"
     public const val BRAINPOOL_P256R1: String = "brainpoolP256r1"
     public const val BRAINPOOL_P384R1: String = "brainpoolP384r1"
+
     public val ALLOWED: List<String> = listOf(
-        X25519,
         P256,
+        P256_ALIAS,
+        P256_IANA,
         P384,
+        P384_IANA,
         BRAINPOOL_P256R1,
         BRAINPOOL_P384R1,
     )

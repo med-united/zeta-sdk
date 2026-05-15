@@ -267,10 +267,11 @@ val isRunningOnCi: Boolean by lazy {
 fun PublishingExtension.addGitlabRepository(project: Project) {
     repositories {
         maven {
-            url = project.uri(System.getenv("MAVEN_REPOSITORY_URL") ?: "http://undefined-maven-repo-url/")
+            val urlstring = System.getenv().get("CI_API_V4_URL") + "/projects/" + System.getenv().get("CI_PROJECT_ID") + "/packages/maven"
+            url = project.uri(urlstring)
             credentials {
-                username = System.getenv("MAVEN_REPOSITORY_USERNAME")
-                password = project.findProperty("gitLabDeployToken") as String? ?: System.getenv("MAVEN_REPOSITORY_PASSWORD")
+                username = "gitlab+deploy-token-1"
+                password = project.findProperty("gitLabDeployToken") as String? ?: System.getenv("DEPLOY_TOKEN")
             }
         }
     }

@@ -16,6 +16,7 @@ setupBuildLogic {
     kotlin {
         sourceSets.commonMain.dependencies {
             api(project(":common"))
+            api(project(":crypto"))
             api(libs.ktor.client.core)
             api(libs.ktor.serialisation)
             api(libs.ktor.client.logging)
@@ -70,6 +71,7 @@ setupBuildLogic {
                 implementation(kotlin("test"))
                 implementation(libs.okhttp.mockwebserver)
                 implementation(libs.okhttp.tls)
+                implementation(libs.mockk)
             }
         }
     }

@@ -34,7 +34,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-public interface AslCertDataApi {
+public fun interface AslCertDataApi {
     public suspend fun fetch(certHashHex: String, cdv: Int): CertData
 }
 

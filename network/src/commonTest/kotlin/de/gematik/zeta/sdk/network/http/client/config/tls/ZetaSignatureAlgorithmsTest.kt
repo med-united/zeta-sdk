@@ -26,6 +26,7 @@ package de.gematik.zeta.sdk.network.http.client.config.tls
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ZetaSignatureAlgorithmsTest {
@@ -36,35 +37,25 @@ class ZetaSignatureAlgorithmsTest {
         val allowed = ZetaSignatureAlgorithms.ALLOWED
 
         // Assert
-        assertEquals(3, allowed.size)
+        assertEquals(4, allowed.size)
         assertTrue("ecdsa_secp256r1_sha256" in allowed)
         assertTrue("ecdsa_secp384r1_sha384" in allowed)
         assertTrue("ecdsa_secp521r1_sha512" in allowed)
+        assertTrue("rsa_pkcs1_sha256" in allowed) // required for the certificate chain validation
     }
 
     @Test
-    fun ALLOWED_WITH_RSA_includesAllEcdsaAndRsaAlgorithms_sizeIsSix() {
+    fun ALLOWED_rsa_pkcs1_sha256AlgorithmsForTheCertificateChainValidation() {
         // Arrange & Act
-        val allowed = ZetaSignatureAlgorithms.ALLOWED_WITH_RSA
+        val allowed = ZetaSignatureAlgorithms.ALLOWED
 
         // Assert
-        assertEquals(6, allowed.size)
-        assertTrue("rsa_pss_rsae_sha256" in allowed)
-        assertTrue("rsa_pss_rsae_sha384" in allowed)
-        assertTrue("rsa_pss_rsae_sha512" in allowed)
+        assertEquals(4, allowed.size)
+        assertFalse("rsa_pss_rsae_sha256" in allowed)
+        assertFalse("rsa_pss_rsae_sha384" in allowed)
+        assertFalse("rsa_pss_rsae_sha512" in allowed)
+        assertTrue("rsa_pkcs1_sha256" in allowed) // required for the certificate chain validation
         ZetaSignatureAlgorithms.ALLOWED.forEach { assertTrue(it in allowed) }
-    }
-
-    @Test
-    fun ALLOWED_OPENSSL_NAMES_containsExpectedNames_sizeIsThree() {
-        // Arrange & Act
-        val names = ZetaSignatureAlgorithms.ALLOWED_OPENSSL_NAMES
-
-        // Assert
-        assertEquals(3, names.size)
-        assertTrue("RSA-SHA256" in names)
-        assertTrue("ecdsa-with-SHA256" in names)
-        assertTrue("ecdsa-with-SHA384" in names)
     }
 
     @Test
@@ -80,25 +71,33 @@ class ZetaSignatureAlgorithmsTest {
     }
 
     @Test
-    fun ALLOWED_KEY_ALGORITHMS_containsRsaAndEc_sizeIsTwo() {
+    fun ALLOWED_KEY_ALGORITHMS_containsEc() {
         // Arrange & Act
         val algorithms = ZetaSignatureAlgorithms.ALLOWED_KEY_ALGORITHMS
 
         // Assert
-        assertEquals(2, algorithms.size)
-        assertTrue("RSA" in algorithms)
+        assertEquals(1, algorithms.size)
         assertTrue("EC" in algorithms)
     }
 
     @Test
-    fun MIN_RSA_KEY_BITS_value_is2048() {
-        // Arrange & Act & Assert
-        assertEquals(2048, ZetaSignatureAlgorithms.MIN_RSA_KEY_BITS)
+    fun ALLOWED_KEY_ALGORITHMS_doesNotcontainsRsa() {
+        // Arrange & Act
+        val algorithms = ZetaSignatureAlgorithms.ALLOWED_KEY_ALGORITHMS
+
+        // Assert
+        assertEquals(1, algorithms.size)
+        assertFalse("RSA" in algorithms)
     }
 
     @Test
     fun MIN_EC_KEY_BITS_value_is256() {
         // Arrange & Act & Assert
         assertEquals(256, ZetaSignatureAlgorithms.MIN_EC_KEY_BITS)
+    }
+
+    @Test
+    fun ALLOWED_WITH_RSA_doesNotContainSha224() {
+        assertFalse(ZetaSignatureAlgorithms.ALLOWED.any { "sha224" in it })
     }
 }

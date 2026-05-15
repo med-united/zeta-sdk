@@ -49,6 +49,7 @@ public interface AslApi {
 public class AslApiImpl(
     private val resource: String,
     internal val aslProdEnvironment: Boolean,
+    internal val requiredRoleOid: String,
     private val aslStorage: AslStorage,
     private val zetaHttpClient: ZetaHttpClient,
     private val accessTokenProvider: AccessTokenProvider,
@@ -73,7 +74,7 @@ public class AslApiImpl(
         val hash = accessToken?.let { token ->
             accessTokenProvider.hash(token)
         }
-        val dpopKey = tpmProvider.generateDpopKey()
+        val dpopKey = tpmProvider.generateDpopKey(resource)
         val dpop = accessTokenProvider.createDpopToken(dpopKey.jwk, HttpMethod.Post.value, aslUrl(request.url, session.cid), null, hash)
 
         request.method = HttpMethod.Post
@@ -103,10 +104,10 @@ public class AslApiImpl(
     private suspend fun ensureHandshake(request: HttpRequestBuilder): EstablishedSession {
         aslStorage.getCurrentSession(resource)?.let { return it }
 
-        var state = AslHandshakeState.create(zetaHttpClient, request, accessTokenProvider, tpmProvider, tlsValidationEnabled)
+        var state = AslHandshakeState.create(zetaHttpClient, request, accessTokenProvider, tpmProvider, tlsValidationEnabled, resource)
         state = state
             .performMessage1AndReceiveMessage2()
-            .processMessage2AndBuildMessage3(aslProdEnvironment)
+            .processMessage2AndBuildMessage3(aslProdEnvironment, requiredRoleOid)
             .sendMessage3AndReceiveMessage4()
 
         return state.validateMessage4AndEstablishSession(aslProdEnvironment)

@@ -24,16 +24,18 @@
 
 package de.gematik.zeta.sdk.attestation.interfaces
 
+import de.gematik.zeta.sdk.attestation.interfaces.FileHashCalculator.NOT_IN_SCOPE_TARGET
+
 actual class FileScanner {
     actual fun scanFiles(files: List<String>): Map<String, String?> {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun startMonitoring(files: List<String>, onModified: (String, String) -> Unit) {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun stopMonitoring() {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 }

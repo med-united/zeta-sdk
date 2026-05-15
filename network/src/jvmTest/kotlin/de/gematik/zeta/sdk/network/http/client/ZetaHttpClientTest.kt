@@ -24,138 +24,705 @@
 
 package de.gematik.zeta.sdk.network.http.client
 
+import de.gematik.zeta.sdk.network.http.client.config.ClientConfig
+import de.gematik.zeta.sdk.network.http.client.config.ProxyConfig
+import de.gematik.zeta.sdk.network.http.client.config.ProxyType
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.logging.LogLevel
+import io.ktor.client.plugins.logging.Logger
+import io.ktor.client.plugins.pluginOrNull
+import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.request.setBody
+import io.ktor.client.request.url
+import io.ktor.http.ContentType
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Parameters
+import io.ktor.http.Url
+import io.ktor.http.contentType
+import io.ktor.http.headersOf
+import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import kotlinx.io.IOException
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
-import org.junit.Test
+import java.io.ByteArrayInputStream
 import java.net.InetAddress
-import javax.net.ssl.SSLHandshakeException
-import javax.net.ssl.SSLPeerUnverifiedException
-import kotlin.test.Ignore
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import javax.net.ssl.X509TrustManager
+import kotlin.io.encoding.Base64
+import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * JVM TLS/CA tests for `zetaHttpClient`.
- * Notes:
- * - Uses OkHttp MockWebServer with TLS for real handshakes.
+ * Unit tests for [zetaHttpClient].
  */
 class ZetaHttpClientJvmTest {
-
-    /** Without the server’s CA, TLS handshake fails (platform roots won’t help). */
-    // TODO: Ignoring test while TLS verification is ignored
-    @Test
-    @Ignore
-    fun testTlsFailsWithoutCustomRootShowsTrustFailure() = runTest {
-        // Arrange
-        val (server, _) = startTlsServerWithCustomRoot()
-        try {
-            val client =
-                ZetaHttpClientBuilder(server.url("/").toString())
-                    .build()
-            // Act
-            val ex = assertFails { client.get("/") }
-
-            // Assert
-            assertTrue(ex.hasCause<SSLHandshakeException>())
-        } finally {
-            server.shutdown()
-        }
-    }
-
-    /** Even if the CA is trusted, a hostname mismatch must fail with peer-unverified. */
-    @Test
-    @Ignore
-    fun testTlsFailsOnHostnameMismatchShowsPeerUnverified() = runTest {
-        // Arrange: server cert SAN is "bad.local", but client uses "localhost"
-        val (server, root) = startTlsServerWithCustomRoot(host = "bad.local")
-        try {
-            val client =
-                ZetaHttpClientBuilder(server.url("/").toString())
-                    .addCaPem(root.certificatePem())
-                    .build()
-            // Act
-            val ex = assertFails { client.get("/") }
-
-            // Assert
-            assertTrue(ex.hasCause<SSLPeerUnverifiedException>())
-        } finally {
-            server.shutdown()
-        }
-    }
-
-    /** Adding the server’s CA enables a successful TLS handshake. */
-    @Test
-    fun testTlsSucceedsWithCustomRootAdded() = runTest {
-        // Arrange
-        val (server, root) = startTlsServerWithCustomRoot()
-        try {
-            val client =
-                ZetaHttpClientBuilder(server.url("/").toString())
-                    .addCaPem(root.certificatePem())
-                    .build()
-            // Act
-            val res = client.get("/")
-
-            // Assert
-            assertEquals(HttpStatusCode.OK, res.status)
-        } finally {
-            server.shutdown()
-        }
-    }
-
-    /** With two different custom roots added, both servers are trusted. */
-    @Test
-    fun testTlsSucceedsForMultipleCustomRoots() = runTest {
-        // Arrange
-        val (serverA, rootA) = startTlsServerWithCustomRoot()
-        val (serverB, rootB) = startTlsServerWithCustomRoot()
-        try {
-            val client =
-                ZetaHttpClientBuilder(serverA.url("/").toString())
-                    .addCaPem(rootA.certificatePem())
-                    .addCaPem(rootB.certificatePem())
-                    .build()
-
-            // Act
-            val okA = client.get(serverA.url("/a").toString()).status == HttpStatusCode.OK
-            val okB = client.get(serverB.url("/b").toString()).status == HttpStatusCode.OK
-
-            // Assert
-            assertTrue(okA && okB)
-        } finally {
-            serverA.shutdown(); serverB.shutdown()
-        }
-    }
-
-    // ---- Helpers ------------------------------------------------------------
-
-    /** Start a TLS server signed by a one-off root CA; returns Pair(server, rootCA). */
-    private fun startTlsServerWithCustomRoot(host: String = "localhost"): Pair<MockWebServer, HeldCertificate> {
+    private fun startTlsServerWithCustomRoot(
+        host: String = "localhost",
+        addIpSan: Boolean = true,
+    ): Pair<MockWebServer, HeldCertificate> {
+        val bindAddress = InetAddress.getByName("127.0.0.1")
         val root = HeldCertificate.Builder().certificateAuthority(1).build()
-        val serverCert = HeldCertificate.Builder()
+        val certBuilder = HeldCertificate.Builder()
             .signedBy(root)
-            .addSubjectAlternativeName(host).apply {
-                // Needed if running tests on Windows
-                if (host == "localhost") addSubjectAlternativeName(InetAddress.getByName(host).hostAddress)
-            }.build()
+            .addSubjectAlternativeName(host)
+        if (addIpSan) certBuilder.addSubjectAlternativeName("127.0.0.1")
+        val serverCert = certBuilder.build()
         val serverHandshake = HandshakeCertificates.Builder()
             .heldCertificate(serverCert, root.certificate)
             .build()
         val server = MockWebServer().apply {
             useHttps(serverHandshake.sslSocketFactory(), false)
             enqueue(MockResponse().setResponseCode(200).setBody("ok"))
-            start()
+            start(bindAddress, 0)
         }
         return server to root
     }
 
-    /** Traverse the cause chain and check if it contains a throwable of type [T]. */
-    private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean =
-        generateSequence(this as Throwable?) { it.cause }.any { it is T }
+    private fun MockWebServer.ipv4Url(path: String = "/") =
+        "https://127.0.0.1:$port$path"
+
+    @Test
+    fun testBaseUrlAppliedToRelativeRequests() = runTest {
+        val expectedHost = "dummy.example.org"
+        var seenHost = ""
+        val engine = MockEngine { req ->
+            seenHost = req.url.host
+            respond("ok", HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClientBuilder("http://$expectedHost").build(engine)
+        client.get("/hellozeta")
+
+        assertEquals(expectedHost, seenHost)
+    }
+
+    @Test
+    fun testBaseUrlWithPathPrefixesRelativeRequests() = runTest {
+        var seenPath = ""
+        val expectedEndpoint = "/testfachdienst/hellozeta"
+        val engine = MockEngine { req ->
+            seenPath = req.url.encodedPath
+            respond("ok", HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClientBuilder("http://dummy.example.org").build(engine)
+        client.get(expectedEndpoint)
+
+        assertEquals(expectedEndpoint, seenPath)
+    }
+
+    @Test
+    fun testTimeoutsShortRequestTimesOut() = runTest {
+        val engine = MockEngine { delay(150); respond("ok", HttpStatusCode.OK) }
+        val client = ZetaHttpClientBuilder().timeouts(requestMs = 50).build(engine)
+
+        assertFailsWith<HttpRequestTimeoutException> { client.get("/") }
+    }
+
+    @Test
+    fun testTimeoutsLongerRequestDoesNotTimeout() = runTest {
+        val engine = MockEngine { delay(50); respond("ok", HttpStatusCode.OK) }
+        val client = ZetaHttpClientBuilder().timeouts(requestMs = 150).build(engine)
+        val res = client.get("/slow-ok")
+
+        assertEquals(HttpStatusCode.OK, res.status)
+    }
+
+    @Test
+    fun testRetryGetSucceedsWithinMaxRetries() = runTest {
+        var retryHits = 0
+        val maxRetries = 2
+        val engine = MockEngine {
+            if (retryHits++ < 2) {
+                respond("", HttpStatusCode.ServiceUnavailable)
+            } else {
+                respond("ok", HttpStatusCode.OK)
+            }
+        }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = true, statusCodes = setOf(HttpStatusCode.ServiceUnavailable), maxRetries = maxRetries)
+            .build(engine)
+        val body = client.get("/").bodyAsText()
+
+        assertEquals("ok", body)
+    }
+
+    @Test
+    fun testRetryExceededStillFails() = runTest {
+        val maxRetries = 2
+        val engine = MockEngine { respond("", HttpStatusCode.ServiceUnavailable) }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = true, statusCodes = setOf(HttpStatusCode.ServiceUnavailable), maxRetries = maxRetries)
+            .build(engine)
+        val res = client.get("/")
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, res.status)
+    }
+
+    @Test
+    fun testRetrySkipsPostWhenIdempotentOnlyTrue() = runTest {
+        var retryHits = 0
+        val engine = MockEngine { retryHits++; respond("", HttpStatusCode.TooManyRequests) }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = true, statusCodes = setOf(HttpStatusCode.ServiceUnavailable))
+            .build(engine)
+        runCatching { client.post("/") { setBody("x") } }
+
+        assertEquals(1, retryHits)
+    }
+
+    @Test
+    fun testRetrySkipsPostWhenIdempotentOnlyFalse() = runTest {
+        var retryHits = 0
+        val engine = MockEngine {
+            retryHits++
+            if (retryHits++ == 0) {
+                respond("", HttpStatusCode.TooManyRequests)
+            } else {
+                respond("ok", HttpStatusCode.OK)
+            }
+        }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = false, statusCodes = setOf(HttpStatusCode.ServiceUnavailable))
+            .build(engine)
+        runCatching { client.post("/") { setBody("x") } }
+
+        assertEquals(2, retryHits)
+    }
+
+    @Test
+    fun testRetryPutConsideredIdempotentWhenIdempotentOnlyTrue() = runTest {
+        var retryHits = 0
+        val maxRetries = 1
+        val engine = MockEngine {
+            if (retryHits++ == 0) {
+                respond("", HttpStatusCode.ServiceUnavailable)
+            } else {
+                respond("ok", HttpStatusCode.OK)
+            }
+        }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = false, statusCodes = setOf(HttpStatusCode.ServiceUnavailable), maxRetries = maxRetries)
+            .build(engine)
+        client.put("/resource")
+
+        assertEquals(2, retryHits)
+    }
+
+    @Test
+    fun testRetryStatusNotInSetDoesNotRetry() = runTest {
+        var retryHits = 0
+        val maxRetries = 3
+        val engine = MockEngine { retryHits++; respond("", HttpStatusCode.NotFound) }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = false, statusCodes = setOf(HttpStatusCode.ServiceUnavailable), maxRetries = maxRetries)
+            .build(engine)
+        client.get("/missing")
+
+        assertEquals(1, retryHits)
+    }
+
+    @Test
+    fun testEngineFailurePropagates() = runTest {
+        val engine = MockEngine { error("error") }
+
+        assertFailsWith<Throwable> {
+            zetaHttpClient({ ZetaHttpClientBuilder().build(engine) }).get("/")
+        }
+    }
+
+    @Test
+    fun testLogLevelNoneEmitsNoLogs() = runTest {
+        val logger = CaptureLogger()
+        val engine = MockEngine { respond("resp", HttpStatusCode.OK) }
+        val client = ZetaHttpClientBuilder().logging(LogLevel.NONE, logProvider = logger).build(engine)
+        client.get("/none")
+        assertTrue(logger.lines.isEmpty())
+    }
+
+    @Test
+    fun testLogLevelInfoOmitsHeadersAndBodies() = runTest {
+        val logger = CaptureLogger()
+        val engine = MockEngine { respond("""{"ok":true}""", HttpStatusCode.OK) }
+        val client = ZetaHttpClientBuilder().logging(LogLevel.INFO, logProvider = logger).build(engine)
+        client.post("/info") {
+            header("X-Token", "abc123")
+            setBody("""{"p":"payload-test"}""")
+        }
+
+        assertTrue(logger.lines.joinToString("\n").let { it.isNotEmpty() && "X-Token" !in it && "payload-abc" !in it })
+    }
+
+    @Test
+    fun testLogLevelHeadersIncludesHeadersNotBodies() = runTest {
+        val logger = CaptureLogger()
+        val engine = MockEngine { respond("""{"ok":true}""", HttpStatusCode.OK) }
+        val client = ZetaHttpClientBuilder().logging(LogLevel.HEADERS, logProvider = logger).build(engine)
+        client.post("/header") {
+            header("X-Token", "abc123")
+            setBody("""{"p":"payload-test"}""")
+        }
+
+        assertTrue(logger.lines.joinToString("\n").let { it.isNotEmpty() && "X-Token" in it && "payload-abc" !in it })
+    }
+
+    @Test
+    fun testLogLevelBodyIncludesHeadersAndBodies() = runTest {
+        val logger = CaptureLogger()
+        val engine = MockEngine { respond("""{"resp":"r-123"}""", HttpStatusCode.OK) }
+        val client = ZetaHttpClientBuilder().logging(LogLevel.ALL, logProvider = logger).build(engine)
+        client.post("/body") {
+            header("X-Token", "abc123")
+            setBody("""{"p":"payload-test"}""")
+            contentType(ContentType.Application.Json)
+        }
+
+        assertTrue(
+            logger.lines.joinToString("\n").let {
+                it.isNotEmpty() && "X-Token" in it && "payload-test" in it && "r-123" in it
+            },
+        )
+    }
+
+    @Test
+    fun testRetryOnExceptionGetRetriedWhenIdempotentTrue() = runTest {
+        val hits = intArrayOf(0)
+        val engine = MockEngine {
+            if (hits[0]++ == 0) throw IOException() else respond("ok", HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = true, statusCodes = emptySet(), maxRetries = 1)
+            .build(engine)
+        val body = client.get("/").bodyAsText()
+
+        assertEquals("ok", body)
+    }
+
+    @Test
+    fun testRetryOnExceptionPutRetriedWhenIdempotentTrue() = runTest {
+        val hits = intArrayOf(0)
+        val engine = MockEngine {
+            if (hits[0]++ == 0) throw IOException() else respond("ok", HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = true, statusCodes = emptySet(), maxRetries = 1)
+            .build(engine)
+        val body = client.put("/resource") { setBody("x") }.bodyAsText()
+
+        assertEquals("ok", body)
+    }
+
+    @Test
+    fun testRetryOnExceptionPostNotRetriedWhenIdempotentTrue() = runTest {
+        val hits = intArrayOf(0)
+        val engine = MockEngine { hits[0]++; throw IOException() }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = true, statusCodes = emptySet(), maxRetries = 1)
+            .build(engine)
+        runCatching { client.post("/") { setBody("x") } }
+
+        assertEquals(1, hits[0])
+    }
+
+    @Test
+    fun testRetryOnExceptionPatchNotRetriedWhenIdempotentTrue() = runTest {
+        val hits = intArrayOf(0)
+        val engine = MockEngine { hits[0]++; throw IOException() }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = true, statusCodes = emptySet(), maxRetries = 1)
+            .build(engine)
+        runCatching { client.patch("/") { setBody("y") } }
+
+        assertEquals(1, hits[0])
+    }
+
+    @Test
+    fun testRetryOnExceptionPostRetriedWhenIdempotentFalse() = runTest {
+        val hits = intArrayOf(0)
+        val engine = MockEngine {
+            if (hits[0]++ == 0) throw IOException() else respond("ok", HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = false, statusCodes = emptySet(), maxRetries = 1)
+            .build(engine)
+        val body = client.post("/") { setBody("x") }.bodyAsText()
+
+        assertEquals("ok", body)
+    }
+
+    @Test
+    fun testRetryOnExceptionNoRetryWhenMaxRetriesZero() = runTest {
+        val hits = intArrayOf(0)
+        val engine = MockEngine { hits[0]++; throw IOException() }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = true, statusCodes = emptySet(), maxRetries = 0)
+            .build(engine)
+        runCatching { client.get("/") }
+
+        assertEquals(1, hits[0])
+    }
+
+    @Test
+    fun testRetryOnExceptionPatchRetriedWhenIdempotentFalse() = runTest {
+        val hits = intArrayOf(0)
+        val engine = MockEngine {
+            if (hits[0]++ == 0) throw IOException() else respond("ok", HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClientBuilder()
+            .retry(onlyIdempotent = false, statusCodes = emptySet(), maxRetries = 1)
+            .build(engine)
+        val body = client.patch("/") { setBody("y") }.bodyAsText()
+
+        assertEquals("ok", body)
+    }
+
+    @Test
+    fun hostOf_extractsHost_fullUrl() {
+        assertEquals("api.example.com", hostOf("https://api.example.com/path"))
+    }
+
+    @Test
+    fun hostOf_extractsHost_urlWithoutProtocol() {
+        assertEquals("api.example.com", hostOf("api.example.com"))
+    }
+
+    @Test
+    fun hostOf_extractsHost_urlWithPort() {
+        assertEquals("api.example.com", hostOf("https://api.example.com:8080/path"))
+    }
+
+    @Test
+    fun hostOf_convertsToLowercase_uppercaseHost() {
+        assertEquals("api.example.com", hostOf("https://API.EXAMPLE.COM"))
+    }
+
+    @Test
+    fun hostOf_removesTrailingDot_hostWithDot() {
+        assertEquals("api.example.com", hostOf("https://api.example.com."))
+    }
+
+    @Test
+    fun hostOf_trimsWhitespace_hostWithSpaces() {
+        assertEquals("api.example.com", hostOf("  https://api.example.com  "))
+    }
+
+    @Test
+    fun hostOf_handlesDoubleSlashPrefix_urlWithoutProtocol() {
+        assertEquals("api.example.com", hostOf("//api.example.com/path"))
+    }
+
+    @Test
+    fun hostOf_extractsHost_subdomain() {
+        assertEquals("dev.api.example.com", hostOf("https://dev.api.example.com"))
+    }
+
+    @Test
+    fun delete_performsDeleteRequest_urlString() = runTest {
+        val mockEngine = MockEngine { request ->
+            assertEquals(HttpMethod.Delete, request.method)
+            respond(content = ByteReadChannel(""), status = HttpStatusCode.NoContent)
+        }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val response = client.delete("/test")
+
+        assertEquals(204, response.status.value)
+    }
+
+    @Test
+    fun delete_performsDeleteRequest_urlObject() = runTest {
+        val mockEngine = MockEngine { request ->
+            assertEquals(HttpMethod.Delete, request.method)
+            respond(content = ByteReadChannel(""), status = HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val response = client.delete(Url("https://example.com/test"))
+
+        assertNotNull(response)
+    }
+
+    @Test
+    fun request_performsRequest_configBlockOnly() = runTest {
+        val mockEngine = MockEngine { request ->
+            assertEquals(HttpMethod.Get, request.method)
+            respond(content = ByteReadChannel(""), status = HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val response = client.request { method = HttpMethod.Get; url("/test") }
+
+        assertNotNull(response)
+    }
+
+    @Test
+    fun request_performsRequest_urlString() = runTest {
+        val mockEngine = MockEngine { request ->
+            assertEquals("/test", request.url.encodedPath)
+            respond(content = ByteReadChannel(""), status = HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val response = client.request("/test") { method = HttpMethod.Get }
+
+        assertNotNull(response)
+    }
+
+    @Test
+    fun request_performsRequest_urlObject() = runTest {
+        val mockEngine = MockEngine { respond(content = ByteReadChannel(""), status = HttpStatusCode.OK) }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val response = client.request(Url("https://example.com/test")) { method = HttpMethod.Get }
+
+        assertNotNull(response)
+    }
+
+    @Test
+    fun submitForm_sendsFormData_urlString() = runTest {
+        var isFormData = false
+        val mockEngine = MockEngine { request ->
+            isFormData = request.body is FormDataContent
+            respond(content = ByteReadChannel(""), status = HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val params = Parameters.build { append("key", "value") }
+        val response = client.submitForm("/test", params)
+
+        assertTrue(isFormData)
+        assertNotNull(response)
+    }
+
+    @Test
+    fun submitForm_encodesInQuery_whenFlagSet() = runTest {
+        var queryFound = false
+        val mockEngine = MockEngine { request ->
+            queryFound = request.url.parameters.contains("key")
+            respond(content = ByteReadChannel(""), status = HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val params = Parameters.build { append("key", "value") }
+        client.submitForm("/test", params, encodeInQuery = true)
+
+        assertTrue(queryFound)
+    }
+
+    @Test
+    fun submitForm_appliesConfigBlock_customHeaders() = runTest {
+        var headerFound = false
+        val mockEngine = MockEngine { request ->
+            headerFound = request.headers.contains("X-Custom", "value")
+            respond(content = ByteReadChannel(""), status = HttpStatusCode.OK)
+        }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val params = Parameters.build { append("key", "value") }
+        client.submitForm("/test", params) { headers.append("X-Custom", "value") }
+
+        assertTrue(headerFound)
+    }
+
+    @Test
+    fun close_closesUnderlyingClient_doesNotThrow() {
+        val mockEngine = MockEngine { respond(ByteReadChannel(""), HttpStatusCode.OK) }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        client.close()
+    }
+
+    @Test
+    fun useRaw_providesAccessToDelegate_returnsValue() {
+        val mockEngine = MockEngine { respond(ByteReadChannel(""), HttpStatusCode.OK) }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val result = client.useRaw { "test value" }
+
+        assertEquals("test value", result)
+    }
+
+    @Test
+    fun get_returnsZetaHttpResponse_withCorrectStatus() = runTest {
+        val mockEngine = MockEngine {
+            respond(
+                content = ByteReadChannel("test body"),
+                status = HttpStatusCode.OK,
+                headers = headersOf("Content-Type" to listOf("text/plain")),
+            )
+        }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val response = client.get("/test")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals("test body", response.bodyAsText())
+    }
+
+    @Test
+    fun post_returnsZetaHttpResponse_withHeaders() = runTest {
+        val mockEngine = MockEngine {
+            respond(
+                content = ByteReadChannel(""),
+                status = HttpStatusCode.Created,
+                headers = headersOf(
+                    "X-Custom-Header" to listOf("custom-value"),
+                    "Content-Type" to listOf("application/json"),
+                ),
+            )
+        }
+        val client = ZetaHttpClient(io.ktor.client.HttpClient(mockEngine))
+        val response = client.post("/test")
+
+        assertEquals("custom-value", response.headers["X-Custom-Header"])
+        assertEquals("application/json", response.headers["Content-Type"])
+    }
+
+    @Test
+    fun zetaHttpClient_installsContentNegotiation_always() {
+        val client = zetaHttpClient(configure = {})
+        val hasPlugin = client.useRaw { pluginOrNull(ContentNegotiation) != null }
+
+        assertTrue(hasPlugin)
+        client.close()
+    }
+
+    @Test
+    fun zetaHttpClient_appliesExtras_whenProvided() {
+        var extrasApplied = false
+        val client = zetaHttpClient(configure = {}, addExtras = { extrasApplied = true })
+
+        assertTrue(extrasApplied)
+        client.close()
+    }
+
+    @Test
+    fun zetaHttpClient_usesInjectedEngine_whenProvided() {
+        val mockEngine = MockEngine { respond(ByteReadChannel(""), HttpStatusCode.OK) }
+        val client = zetaHttpClient(configure = { engineFactory = { mockEngine } })
+
+        assertNotNull(client)
+        client.close()
+    }
+
+    @Test
+    fun buildPlatformClient_disableServerValidation_acceptsAnyCertificate() = runTest {
+        // Arrange
+        val (server, _) = startTlsServerWithCustomRoot()
+        try {
+            val client = ZetaHttpClientBuilder()
+                .disableServerValidation(true)
+                .build()
+
+            // Act
+            val response = client.get(server.ipv4Url())
+
+            // Assert
+            assertEquals(HttpStatusCode.OK, response.status)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun checkServerTrusted_chainSmallerThan2_skipsRevocationCheck() {
+        // Arrange
+        val delegate = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+        val trustManager = RevocationCheckingTrustManager(delegate)
+        val cert = CertificateFactory.getInstance("X.509")
+            .generateCertificate(
+                ByteArrayInputStream(
+                    HeldCertificate.Builder().build().certificate.encoded,
+                ),
+            ) as X509Certificate
+
+        // Act & Assert
+        trustManager.checkServerTrusted(arrayOf(cert), "RSA")
+    }
+
+    @Test
+    fun applyProxy_setsSystemProperties_whenSocksWithCredentials() {
+        // Arrange
+        val cfg = ClientConfig().apply {
+            network = network.copy(
+                proxyConfig = ProxyConfig(
+                    type = ProxyType.SOCKS,
+                    host = "127.0.0.1",
+                    port = 1080,
+                    username = "user",
+                    password = "pass".toCharArray(),
+                ),
+            )
+        }
+
+        // Act
+        val client = buildPlatformClient(cfg) {}
+
+        // Assert
+        assertEquals("user", System.getProperty("java.net.socks.username"))
+        assertEquals("pass", System.getProperty("java.net.socks.password"))
+        client.close()
+    }
+
+    @Test
+    fun checkServerTrusted_revocationCheckFails_throwsCertificateException() = runTest {
+        // Arrange
+        val (server, root) = startTlsServerWithCustomRoot()
+        try {
+            val client = ZetaHttpClientBuilder()
+                .disableServerValidation(false)
+                .addCaPem(root.certificatePem())
+                .build()
+
+            // Act & Assert
+            assertFailsWith<Exception> {
+                client.get(server.ipv4Url())
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun buildHttpClient_setsProxyAuthorizationHeader_whenHttpProxyWithCredentials() = runTest {
+        // Arrange
+        val proxyServer = MockWebServer()
+        proxyServer.enqueue(MockResponse().setResponseCode(200).setBody("ok"))
+        proxyServer.start()
+
+        val cfg = ClientConfig().apply {
+            baseUrlOverride = "http://example.com"
+            security = security.copy(disableServerValidation = true)
+            network = network.copy(
+                proxyConfig = ProxyConfig(
+                    type = ProxyType.HTTP,
+                    host = "127.0.0.1",
+                    port = proxyServer.port,
+                    username = "user",
+                    password = "pass".toCharArray(),
+                ),
+            )
+        }
+
+        // Act
+        val client = buildHttpClient(cfg) {}
+        client.get("http://example.com/test")
+        client.close()
+
+        // Assert
+        val request = proxyServer.takeRequest()
+        val expected = "Basic " + Base64.encode("user:pass".encodeToByteArray())
+        assertEquals(expected, request.getHeader("Proxy-Authorization"))
+        proxyServer.shutdown()
+    }
+
+    private class CaptureLogger : Logger {
+        val lines = mutableListOf<String>()
+        override fun log(message: String) { lines += message }
+    }
 }
