@@ -41,6 +41,7 @@ internal class ZetaTlsValidatorInterceptor : Interceptor {
             val result = ZetaTlsValidator.validateHandshake(
                 negotiatedCipher = cipher,
                 negotiatedProtocol = tlsVersion,
+                null,
             )
             if (result.isCompliant) {
                 Log.i { "ZetaTls: handshake OK cipher=$cipher, protocol=$tlsVersion" }

@@ -24,6 +24,5 @@
 
 package de.gematik.zeta.sdk.storage
 
-actual fun provideSdkStorage(aesB64Key: String): SdkStorage {
+actual fun provideSdkStorage(config: StorageConfig.Default): SdkStorage =
     TODO("Not yet implemented")
-}

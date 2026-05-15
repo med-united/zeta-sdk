@@ -143,16 +143,12 @@ class AttestationService(
             return QuoteResponse(error = ServiceError(ErrorCode.TPM_NOT_AVAILABLE, "TPM not available"))
         }
 
-        if (config.enableFileIntegrity) {
-            if (!fileIntegrity.isIntact()) {
-                return QuoteResponse(error = ServiceError(ErrorCode.INTERNAL_ERROR, "Filesystem integrity violated"))
-            }
+        if (config.enableFileIntegrity && !fileIntegrity.isIntact()) {
+            return QuoteResponse(error = ServiceError(ErrorCode.INTERNAL_ERROR, "Filesystem integrity violated"))
         }
 
-        if (config.enableProcessOrigin) {
-            if (!monitor.isProcessAllowed(origin)) {
-                return QuoteResponse(error = ServiceError(ErrorCode.PROCESS_NOT_ALLOWED, "Client process not allowed"))
-            }
+        if (config.enableProcessOrigin && !monitor.isProcessAllowed(origin)) {
+            return QuoteResponse(error = ServiceError(ErrorCode.PROCESS_NOT_ALLOWED, "Client process not allowed"))
         }
 
         return try {

@@ -30,6 +30,7 @@ import de.gematik.zeta.sdk.network.http.client.config.ProxyConfig
 import de.gematik.zeta.sdk.network.http.client.config.ProxyType
 import de.gematik.zeta.sdk.network.http.client.config.SecurityConfig
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaCipherSuites
+import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaTlsProtocols.TLS_1_2
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaTrustManager
 import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
@@ -38,7 +39,6 @@ import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.pingInterval
 import okhttp3.CipherSuite
 import okhttp3.ConnectionSpec
-import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.TlsVersion
 import java.io.ByteArrayInputStream
@@ -47,6 +47,7 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.security.KeyStore
 import java.security.SecureRandom
+import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -96,12 +97,6 @@ internal actual fun buildPlatformClient(
     val okClient = OkHttpClient.Builder()
         .applyHostnameVerifier(serverValidationDisabled)
         .sslSocketFactory(socketFactory, trustManager)
-        .dispatcher(
-            Dispatcher().apply {
-                maxRequests = cfg.network.maxRequest
-                maxRequestsPerHost = cfg.network.maxRequest
-            },
-        )
         .connectionSpecs(buildConnectionSpecs(serverValidationDisabled))
         .apply {
             if (!serverValidationDisabled) {
@@ -109,6 +104,7 @@ internal actual fun buildPlatformClient(
             }
         }
         .applyProxy(cfg.network.proxyConfig)
+        .retryOnConnectionFailure(false)
         .build()
 
     return HttpClient(OkHttp) {
@@ -128,7 +124,7 @@ private fun buildTlsComponents(security: SecurityConfig): Pair<SSLSocketFactory,
 private fun buildInsecureTls(): Pair<SSLSocketFactory, X509TrustManager> {
     Log.w { "JVM: TLS validation DISABLED — not compliant with gematik TLS requirements" }
     val trustAll = TrustAllX509TrustManager()
-    val sslContext = SSLContext.getInstance("TLS").apply {
+    val sslContext = SSLContext.getInstance(TLS_1_2).apply {
         init(null, arrayOf(trustAll), SecureRandom())
     }
     return sslContext.socketFactory to trustAll
@@ -159,9 +155,10 @@ private fun buildSecureTls(securityConfig: SecurityConfig): Pair<SSLSocketFactor
 
     val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
     tmf.init(keyStore)
-    val trustManager = tmf.trustManagers.filterIsInstance<X509TrustManager>().first()
+    val baseTrustManager = tmf.trustManagers.filterIsInstance<X509TrustManager>().first()
+    val trustManager = RevocationCheckingTrustManager(baseTrustManager)
 
-    val sslContext = SSLContext.getInstance("TLS").apply {
+    val sslContext = SSLContext.getInstance(TLS_1_2).apply {
         init(null, arrayOf(trustManager), SecureRandom())
     }
 
@@ -216,4 +213,44 @@ private class TrustAllX509TrustManager : X509TrustManager {
     override fun checkClientTrusted(chain: Array<out X509Certificate?>?, authType: String?) {} // NOSONAR
     override fun checkServerTrusted(chain: Array<out X509Certificate?>?, authType: String?) {} // NOSONAR
     override fun getAcceptedIssuers(): Array<out X509Certificate?> = emptyArray()
+}
+
+@Suppress("CustomX509TrustManager")
+public class RevocationCheckingTrustManager(
+    private val delegate: X509TrustManager,
+) : X509TrustManager {
+
+    private val revocationChecker = RevocationChecker()
+
+    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+        delegate.checkClientTrusted(chain, authType)
+    }
+
+    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+        delegate.checkServerTrusted(chain, authType)
+
+        if (chain != null && chain.size >= 2) {
+            val certificate = chain[0]
+            val issuerCertificate = chain[1]
+
+            try {
+                kotlinx.coroutines.runBlocking {
+                    revocationChecker.checkRevocation(
+                        certDer = certificate.encoded,
+                        issuerDer = issuerCertificate.encoded,
+                    )
+                }
+                Log.i { "Certificate revocation check passed" }
+            } catch (e: CertificateRevokedException) {
+                Log.e { "Certificate revoked: ${e.message}" }
+                throw CertificateException("Certificate has been revoked", e)
+            } catch (e: Exception) {
+                Log.w { "Revocation check failed (non-fatal): ${e.message}" }
+            }
+        }
+    }
+
+    override fun getAcceptedIssuers(): Array<X509Certificate> {
+        return delegate.acceptedIssuers
+    }
 }

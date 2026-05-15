@@ -25,20 +25,24 @@
 package de.gematik.zeta.sdk.crypto
 
 actual class X509CertValidator actual constructor() {
+    private val IMPLEMENT_PENDING = "PENDING IMPL."
+
     actual fun checkValidity(certDer: ByteArray) {
+        error(IMPLEMENT_PENDING)
     }
 
     actual fun getExtendedKeyUsage(certDer: ByteArray): List<String> {
-        TODO("Not yet implemented")
+        error(IMPLEMENT_PENDING)
     }
 
     actual fun getPublicKey(certDer: ByteArray): ByteArray {
-        TODO("Not yet implemented")
+        error(IMPLEMENT_PENDING)
     }
 
     actual fun validateCertChain(
         chainDer: List<ByteArray>,
         trustAnchorsDer: List<ByteArray>,
     ) {
+        error(IMPLEMENT_PENDING)
     }
 }

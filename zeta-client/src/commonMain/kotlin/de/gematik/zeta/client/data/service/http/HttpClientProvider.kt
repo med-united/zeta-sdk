@@ -26,13 +26,16 @@ package de.gematik.zeta.client.data.service.http
 
 import de.gematik.zeta.client.data.service.smb.HardcodedTokenProvider
 import de.gematik.zeta.client.di.DIContainer.ASL_PROD
+import de.gematik.zeta.client.di.DIContainer.CUSTOM_SMCB_ENABLED
 import de.gematik.zeta.client.di.DIContainer.DISABLE_SERVER_VALIDATION
+import de.gematik.zeta.client.di.DIContainer.REQUIRED_OID
 import de.gematik.zeta.client.di.DIContainer.SMB_KEYSTORE_CREDENTIALS
 import de.gematik.zeta.client.di.DIContainer.SMCB_CONNECTOR_CONFIG
+import de.gematik.zeta.client.di.DIContainer.STORAGE_AES_KEY
 import de.gematik.zeta.platform.Platform
 import de.gematik.zeta.platform.platform
 import de.gematik.zeta.sdk.BuildConfig
-import de.gematik.zeta.sdk.StorageConfig
+import de.gematik.zeta.sdk.SdkStatus
 import de.gematik.zeta.sdk.TpmConfig
 import de.gematik.zeta.sdk.ZetaSdk
 import de.gematik.zeta.sdk.ZetaSdk.forget
@@ -41,17 +44,24 @@ import de.gematik.zeta.sdk.attestation.model.AttestationConfig
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
+import de.gematik.zeta.sdk.authentication.smcb.CustomConnectorApi
+import de.gematik.zeta.sdk.authentication.smcb.CustomSmcbTokenProvider
 import de.gematik.zeta.sdk.authentication.smcb.SmcbTokenProvider
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
+import de.gematik.zeta.sdk.storage.StorageConfig
 import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logger
+import kotlin.io.encoding.Base64
 
 public interface HttpClientProvider {
     public fun provideHttpClient(): ZetaHttpClient
     public fun setupEnvUrl(url: String)
     public suspend fun forget()
+    public suspend fun logout()
+    public suspend fun status(): SdkStatus
 }
+
+private const val demoClient = "ZETA-Test-Client"
 
 public class HttpClientProviderImpl : HttpClientProvider {
     private lateinit var httpClient: ZetaHttpClient
@@ -68,14 +78,20 @@ public class HttpClientProviderImpl : HttpClientProvider {
         sdkClient.forget()
     }
 
+    override suspend fun logout() {
+        sdkClient.logout()
+    }
+
+    override suspend fun status(): SdkStatus = sdkClient.status().getOrThrow()
+
     private fun prepareHttpClient(url: String): ZetaHttpClient {
         sdkClient = ZetaSdk.build(
             resource = url,
             config = BuildConfig(
+                demoClient,
+                productVersion = "1.0.0",
                 "demo-client",
-                productVersion = "0.5.0",
-                "sdk-client",
-                StorageConfig(),
+                StorageConfig.Default(STORAGE_AES_KEY),
                 object : TpmConfig {},
                 AuthConfig(
                     listOf(
@@ -90,34 +106,45 @@ public class HttpClientProviderImpl : HttpClientProvider {
                         SMCB_CONNECTOR_CONFIG.baseUrl.isNotEmpty() ->
                             SmcbTokenProvider(SMCB_CONNECTOR_CONFIG)
 
+                        CUSTOM_SMCB_ENABLED ->
+                            CustomSmcbTokenProvider(
+                                connectorApi = object : CustomConnectorApi {
+                                    override suspend fun readCertificate(): ByteArray {
+                                        // Implement your own certificate retrieval here.
+                                        // Return the raw DER-encoded X.509 certificate bytes.
+                                        // Example: call your own connector service, HSM, or card reader.
+                                        // return myConnector.getCertificate()
+
+                                        return Base64.decode("/ASGePjrYWaieIxzCi1+wEBqjVPQ83x7DOZDuA=...")
+                                    }
+
+                                    override suspend fun externalAuthenticate(base64Challenge: String): ByteArray {
+                                        // Implement your own signing here.
+                                        // base64Challenge: base64-encoded hash of the token to sign.
+                                        // Return the raw DER-encoded ECDSA signature bytes.
+                                        // Example: call your HSM or card reader to sign the challenge.
+                                        // return myConnector.sign(base64Challenge)
+
+                                        return Base64.decode("/ASGePjrYWaieIxzCi1+wEBqjVPQ83x7DOZDuA=...")
+                                    }
+                                },
+                            )
+
                         else ->
                             HardcodedTokenProvider()
                     },
                     AttestationConfig.software(),
+                    requiredRoleOid = REQUIRED_OID ?: "",
                 ),
                 getPlatformProduct(),
                 ZetaHttpClientBuilder()
                     .disableServerValidation(DISABLE_SERVER_VALIDATION)
-                    .logging(
-                        LogLevel.ALL,
-                        object : Logger {
-                            override fun log(message: String) {
-                                println(message)
-                            }
-                        },
-                    ),
+                    .logging(LogLevel.ALL),
             ),
         )
 
         return sdkClient.httpClient {
-            logging(
-                LogLevel.ALL,
-                object : Logger {
-                    override fun log(message: String) {
-                        println(message)
-                    }
-                },
-            )
+            logging(LogLevel.ALL)
             disableServerValidation(DISABLE_SERVER_VALIDATION)
         }
     }
@@ -125,8 +152,8 @@ public class HttpClientProviderImpl : HttpClientProvider {
     private fun getPlatformProduct(): PlatformProductId {
         return when (val plat = platform()) {
             is Platform.Jvm.Macos, Platform.Native.Macos -> PlatformProductId.AppleProductId("apple", "macos", listOf())
-            is Platform.Jvm.Linux -> PlatformProductId.LinuxProductId("linux", "", "demo-client", "0.5.0")
-            is Platform.Jvm.Windows -> PlatformProductId.WindowsProductId("windows", "", "demo-client")
+            is Platform.Jvm.Linux -> PlatformProductId.LinuxProductId("linux", "", demoClient, "0.5.0")
+            is Platform.Jvm.Windows -> PlatformProductId.WindowsProductId("windows", "", demoClient)
             else -> error("Unknown platform: $plat")
         }
     }

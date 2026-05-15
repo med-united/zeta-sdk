@@ -40,17 +40,17 @@ import dev.whyoleg.cryptography.algorithms.ECDSA
 import dev.whyoleg.cryptography.algorithms.SHA256
 import kotlin.io.encoding.Base64
 import kotlin.uuid.Uuid
-
 private class SoftwareCryptoProvider(
     private val storage: TpmStorage,
     private val x509PemReader: X509PemReader,
 ) : TpmProvider {
     override val isHardwareBacked: Boolean = false
-
     private var clientKey: KeyPair? = null
-    private var dpopKey: KeyPair? = null
 
     private val provider = CryptographyProvider.Default
+
+    // CryptographyProvider.get() cannot be replaced with index operator
+    // as the [] operator is not available on this type
     private val ec = provider.get(ECDSA)
 
     @Suppress("UnsafeCallOnNullableType")
@@ -65,7 +65,6 @@ private class SoftwareCryptoProvider(
                 clientKey = KeyPair(
                     skpi = pubBytes,
                     sec1 = byteArrayOf(),
-//                    sec1 = kp.publicKey.encodeToByteArray(PublicKey.Format.RAW),
                     privateKey = privBytes,
                 )
 
@@ -80,27 +79,31 @@ private class SoftwareCryptoProvider(
         return PublicKeyOut(clientKey!!.skpi, jwk)
     }
 
-    @Suppress("UnsafeCallOnNullableType")
-    override suspend fun generateDpopKey(): PublicKeyOut {
-        if (dpopKey == null) {
+    override suspend fun generateDpopKey(resource: String): PublicKeyOut {
+        val existing = loadDpopKeysFromStorage(resource)
+        val key = if (existing != null) {
+            existing
+        } else {
             val kp = ec.keyPairGenerator(EC.Curve.P256).generateKey()
             val pubBytes = kp.publicKey.encodeToByteArray(PublicKey.Format.RAW)
             val privBytes = kp.privateKey.encodeToByteArray(PrivateKey.Format.RAW)
 
-            dpopKey = KeyPair(
+            val generated = KeyPair(
                 skpi = pubBytes,
                 sec1 = byteArrayOf(),
-//                sec1 = kp.publicKey.encodeToByteArray(PublicKey.Format.RAW),
                 privateKey = privBytes,
             )
 
             storage.saveDpopKeys(
-                toPem("PUBLIC KEY", dpopKey!!.skpi),
-                toPem("PRIVATE KEY", dpopKey!!.privateKey),
+                resource,
+                toPem("PUBLIC KEY", generated.skpi),
+                toPem("PRIVATE KEY", generated.privateKey),
             )
+
+            generated
         }
-        val jwk = toJwk(dpopKey!!.skpi)
-        return PublicKeyOut(dpopKey!!.skpi, jwk)
+
+        return PublicKeyOut(key.skpi, toJwk(key.skpi))
     }
 
     @Suppress("UnsafeCallOnNullableType")
@@ -109,10 +112,11 @@ private class SoftwareCryptoProvider(
         return signForJws(clientKey!!.privateKey, input)
     }
 
-    @Suppress("UnsafeCallOnNullableType")
-    override suspend fun signWithDpopKey(input: ByteArray): ByteArray {
-        checkNotNull(dpopKey) { "DPoP key not initialized" }
-        return signForJws(dpopKey!!.privateKey, input)
+    override suspend fun signWithDpopKey(input: ByteArray, resource: String): ByteArray {
+        val key = checkNotNull(loadDpopKeysFromStorage(resource)) {
+            "DPoP key not found for resource: $resource"
+        }
+        return signForJws(key.privateKey, input)
     }
 
     override suspend fun readSmbCertificate(p12File: String, alias: String, password: String): ByteArray {
@@ -121,7 +125,7 @@ private class SoftwareCryptoProvider(
     }
 
     override suspend fun readSmbCertificateFromBytes(data: ByteArray, alias: String, password: String): ByteArray {
-        check(data.isNotEmpty()) { "SM-B certificate bytes are empty " }
+        check(data.isNotEmpty()) { "SM-B certificate bytes are empty" }
         return x509PemReader.loadCertificateFromBytes(data, alias, password)
     }
 
@@ -135,21 +139,56 @@ private class SoftwareCryptoProvider(
     }
 
     override suspend fun signWithSmbKeyFromBytes(input: ByteArray, keystoreBytes: ByteArray, alias: String, password: String): ByteArray {
-        val smbKey = x509PemReader.loadPrivateKeyFromBytes(input, alias, password)
+        val smbKey = x509PemReader.loadPrivateKeyFromBytes(keystoreBytes, alias, password)
         return signForJwsBp(smbKey, input)
     }
 
     override suspend fun randomUuid(): Uuid = Uuid.random()
 
-    override fun forget() {
-        clientKey = null
-        dpopKey = null
+    override suspend fun forget(resource: String?) {
+        if (resource != null) {
+            storage.deleteDpopKeys(resource)
+        } else {
+            clientKey = null
+            storage.deleteAllDpopKeys()
+        }
+    }
+
+    private suspend fun loadDpopKeysFromStorage(resource: String): KeyPair? {
+        val privRaw = storage.getDpopPrivateKey(resource) ?: return null
+        val pubRaw = storage.getDpopPublicKey(resource) ?: return null
+
+        return try {
+            KeyPair(
+                skpi = decodePem(decodeHexPem(pubRaw)),
+                sec1 = byteArrayOf(),
+                privateKey = decodePem(decodeHexPem(privRaw)),
+            )
+        } catch (ex: Exception) {
+            Log.d { "Failed to load DPoP keys for $resource: ${ex.message}" }
+            null
+        }
+    }
+
+    private suspend fun loadClientKeysFromStorage(): KeyPair? {
+        val privRaw = storage.getClientPrivateKey() ?: return null
+        val pubRaw = storage.getClientPublicKey() ?: return null
+
+        return try {
+            KeyPair(
+                skpi = decodePem(decodeHexPem(pubRaw)),
+                sec1 = byteArrayOf(),
+                privateKey = decodePem(decodeHexPem(privRaw)),
+            )
+        } catch (ex: Exception) {
+            Log.d { "Failed to load client keys: ${ex.message}" }
+            null
+        }
     }
 
     private suspend fun signForJws(privateKey: ByteArray, signingInput: ByteArray): ByteArray {
         val priv = ec.privateKeyDecoder(EC.Curve.P256)
             .decodeFromByteArray(PrivateKey.Format.RAW, privateKey)
-
         val sig = priv.signatureGenerator(SHA256, ECDSA.SignatureFormat.DER)
             .generateSignature(signingInput)
         return derEcdsaToJose(sig, 32)
@@ -158,7 +197,6 @@ private class SoftwareCryptoProvider(
     private suspend fun signForJwsBp(privateKey: ByteArray, signingInput: ByteArray): ByteArray {
         val priv = ec.privateKeyDecoder(EC.Curve.brainpoolP256r1)
             .decodeFromByteArray(PrivateKey.Format.DER, privateKey)
-
         val sig = priv.signatureGenerator(SHA256, ECDSA.SignatureFormat.DER)
             .generateSignature(signingInput)
         return derEcdsaToJose(sig, 32)
@@ -167,31 +205,6 @@ private class SoftwareCryptoProvider(
     private fun toPem(type: String, der: ByteArray): String {
         val b64 = Base64.Pem.encode(der)
         return "-----BEGIN $type-----\n$b64\n-----END $type-----\n"
-    }
-
-    private suspend fun loadClientKeysFromStorage(): KeyPair? {
-        val privRaw = storage.getClientPrivateKey() ?: return null
-        val pubRaw = storage.getClientPublicKey() ?: return null
-
-        val privPem = decodeHexPem(privRaw)
-        val pubPem = decodeHexPem(pubRaw)
-
-        return try {
-            val privBytes = decodePem(privPem)
-            val pubBytes = decodePem(pubPem)
-
-            KeyPair(
-                skpi = pubBytes,
-                sec1 = byteArrayOf(),
-//                sec1 = ec.publicKeyDecoder(EC.Curve.P256)
-//                    .decodeFromByteArray(PublicKey.Format.DER, pubBytes)
-//                    .encodeToByteArray(PublicKey.Format.DER),
-                privateKey = privBytes,
-            )
-        } catch (ex: Exception) {
-            Log.d { "Failed to load keys: ${ex.message}" }
-            null
-        }
     }
 
     private fun decodePem(pem: String): ByteArray {
@@ -210,11 +223,8 @@ private class SoftwareCryptoProvider(
         val provider = CryptographyProvider.Default
         val ec = provider.get(ECDSA)
 
-        // Decode the public key from DER or SEC1 format (use what you stored)
         val pub: PublicKey = ec.publicKeyDecoder(EC.Curve.P256)
             .decodeFromByteArray(PublicKey.Format.RAW.Uncompressed, publicKey)
-
-        // Extract raw SEC1 uncompressed point bytes
         val sec1: ByteArray = pub.encodeToByteArray(PublicKey.Format.RAW.Uncompressed)
 
         require(sec1.size == 65 && sec1[0] == 0x04.toByte()) { "Invalid P-256 public key" }
@@ -225,12 +235,8 @@ private class SoftwareCryptoProvider(
         val xB = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).encode(x)
         val yB = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).encode(y)
 
-        // Compute the JWK kid from SHA-256 hash of {"crv":"P-256","kty":"EC","x":"xB","y":"yB"}
         val jwkJson = """{"crv":"P-256","kty":"EC","x":"$xB","y":"$yB"}"""
-
-        val kid = Base64
-            .UrlSafe
-            .withPadding(Base64.PaddingOption.ABSENT)
+        val kid = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT)
             .encode(hashWithSha256(jwkJson.encodeToByteArray()))
 
         return Jwk(

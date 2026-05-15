@@ -76,12 +76,13 @@ public object DIContainer {
         getConfig("SMCB_CARD_HANDLE") ?: "",
     )
 
+    public const val CUSTOM_SMCB_ENABLED: Boolean = false
     public val DISABLE_SERVER_VALIDATION: Boolean = "true".contentEquals((getConfig("DISABLE_SERVER_VALIDATION") ?: "").lowercase())
-
+    public val STORAGE_AES_KEY: String = getConfig("STORAGE_AES_KEY") ?: error("STORAGE_AES_KEY must be provided.")
     public val POPP_TOKEN: String? = getConfig("POPP_TOKEN")
 
     public val ASL_PROD: Boolean = "true".contentEquals((getConfig("ASL_PROD") ?: "true").lowercase())
-
+    public val REQUIRED_OID: String? = getConfig("REQUIRED_ROLE_OID")
     private fun getUrlEnvironments(): List<String> {
         return getConfig("ENVIRONMENTS")
             ?.trim()

@@ -27,38 +27,33 @@ package de.gematik.zeta.sdk.attestation.tpm
 import de.gematik.zeta.sdk.attestation.model.TpmQuoteResult
 
 actual class TpmAccess actual constructor() {
-
-    private val storage = mutableMapOf<Int, ByteArray>()
-
+    val notInScopeTarget = "The JVM target is not in scope of the Attestation Service"
     actual fun generateQuote(
         attChallengeBytes: ByteArray,
         pcrSelection: List<Int>,
     ): TpmQuoteResult {
-        return TpmQuoteResult(byteArrayOf(), byteArrayOf(), byteArrayOf())
+        error(notInScopeTarget)
     }
 
     actual fun readPCRs(pcrSelection: List<Int>): Map<Int, ByteArray> {
-        return pcrSelection.mapNotNull { pcr ->
-            storage[pcr]?.let { hash -> pcr to hash }
-        }.toMap()
+        error(notInScopeTarget)
     }
 
-    actual fun isAvailable(): Boolean {
-        return true
-    }
+    actual fun isAvailable(): Boolean = error(notInScopeTarget)
 
     actual fun extendPCR(pcrIndex: Int, data: ByteArray) {
-        storage[pcrIndex] = data
+        error(notInScopeTarget)
     }
 
     actual fun resetPCR(pcrIndex: Int) {
-        storage.clear()
+        error(notInScopeTarget)
     }
 
     actual fun removeAttestationKey() {
+        error(notInScopeTarget)
     }
 
-    actual fun getEventLog(): ByteArray = byteArrayOf(0)
-    actual fun getEKCertificateChain(): List<ByteArray> = emptyList()
-    actual fun provisionAttestationKey(): ByteArray = byteArrayOf(0)
+    actual fun getEventLog(): ByteArray = error(notInScopeTarget)
+    actual fun getEKCertificateChain(): List<ByteArray> = error(notInScopeTarget)
+    actual fun provisionAttestationKey(): ByteArray = error(notInScopeTarget)
 }

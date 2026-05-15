@@ -83,7 +83,7 @@ class ZetaCertificateValidatorTest {
     }
 
     @Test
-    fun validate_withValidRsaCert_returnsIsValidTrue() {
+    fun validate_withRsaCert_returnsIsValidFalse() {
         // Arrange
         val cert = ZetaCertInfo(
             subjectDN = "CN=rsa-test",
@@ -98,27 +98,7 @@ class ZetaCertificateValidatorTest {
         val result = ZetaCertificateValidator.validate(cert, now)
 
         // Assert
-        assertTrue(result.isValid)
-    }
-
-    @Test
-    fun validate_withRsaKeyTooSmall_returnsIsValidFalse() {
-        // Arrange
-        val cert = ZetaCertInfo(
-            subjectDN = "CN=weak-rsa",
-            sigAlgName = "SHA256WITHRSA",
-            keyAlgorithm = "RSA",
-            keySize = 1024,
-            notBefore = 0,
-            notAfter = 2000,
-        )
-
-        // Act
-        val result = ZetaCertificateValidator.validate(cert, now)
-
-        // Assert
         assertFalse(result.isValid)
-        assertTrue(result.errors.any { "RSA key too small" in it })
     }
 
     @Test
@@ -148,7 +128,7 @@ class ZetaCertificateValidatorTest {
     }
 
     @Test
-    fun validate_withNullCurveName_doesNotAddCurveError() {
+    fun validate_withNullCurveName_addsCurveError() {
         // Arrange
         val cert = validEcCert().copy(curveName = null)
 
@@ -156,8 +136,8 @@ class ZetaCertificateValidatorTest {
         val result = ZetaCertificateValidator.validate(cert, now)
 
         // Assert
-        assertTrue(result.isValid)
-        assertTrue(result.errors.none { "curve" in it.lowercase() })
+        assertFalse(result.isValid)
+        assertTrue(result.errors.any { "EC certificate has no named curve" in it })
     }
 
     @Test
@@ -251,16 +231,14 @@ class ZetaCertificateValidatorTest {
     }
 
     @Test
-    fun ZetaCertificateAlgorithms_ALLOWED_SIGNATURE_ALGORITHMS_containsExpectedAlgorithms_sizeIsFour() {
+    fun ZetaCertificateAlgorithms_ALLOWED_SIGNATURE_ALGORITHMS_containsExpectedAlgorithms() {
         // Arrange & Act
         val allowed = ZetaCertificateValidator.ZetaCertificateAlgorithms.ALLOWED_SIGNATURE_ALGORITHMS
 
         // Assert
-        assertEquals(4, allowed.size)
+        assertEquals(2, allowed.size)
         assertTrue("SHA256WITHECDSA" in allowed)
-        assertTrue("SHA256WITHRSA" in allowed)
-        assertTrue("RSASSA-PSS" in allowed)
-        assertTrue("SHA256WITHRSAANDMGF1" in allowed)
+        assertTrue("SHA384WITHECDSA" in allowed)
     }
 
     @Test
@@ -274,12 +252,6 @@ class ZetaCertificateValidatorTest {
         assertTrue("SHA1WITHRSA" in forbidden)
         assertTrue("MD5WITHRSA" in forbidden)
         assertTrue("MD2WITHRSA" in forbidden)
-    }
-
-    @Test
-    fun ZetaCertificateAlgorithms_MIN_RSA_KEY_BITS_value_is2048() {
-        // Arrange & Act & Assert
-        assertEquals(2048, ZetaCertificateValidator.ZetaCertificateAlgorithms.MIN_RSA_KEY_BITS)
     }
 
     @Test

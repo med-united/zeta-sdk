@@ -168,7 +168,7 @@ actual class ML768Kem actual constructor() : Kem {
     private fun loadPublicKey(data: ByteArray): CPointer<EVP_PKEY> = memScoped {
         EVP_PKEY_new_raw_public_key_ex(
             null,
-            "ML-KEM-768",
+            algorithmName,
             null,
             data.toUByteArray().refTo(0),
             data.size.toULong(),
@@ -178,7 +178,7 @@ actual class ML768Kem actual constructor() : Kem {
     private fun loadPrivateKey(data: ByteArray): CPointer<EVP_PKEY> = memScoped {
         EVP_PKEY_new_raw_private_key_ex(
             null,
-            "ML-KEM-768",
+            algorithmName,
             null,
             data.toUByteArray().refTo(0),
             data.size.toULong(),

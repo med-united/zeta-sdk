@@ -13,3 +13,70 @@ static int ktor_sk_X509_num(const STACK_OF(X509)* sk) {
 static X509* ktor_sk_X509_value(const STACK_OF(X509)* sk, int i) {
     return sk_X509_value(sk, i);
 }
+
+static int ktor_sk_GENERAL_NAME_num(GENERAL_NAMES *names) {
+    return sk_GENERAL_NAME_num(names);
+}
+
+static GENERAL_NAME* ktor_sk_GENERAL_NAME_value(GENERAL_NAMES *names, int i) {
+    return sk_GENERAL_NAME_value(names, i);
+}
+
+static const char* ktor_general_name_dns(GENERAL_NAME *name) {
+    if (name->type == GEN_DNS) {
+        return (const char *)ASN1_STRING_get0_data(name->d.ia5);
+    }
+    return NULL;
+}
+
+static int ktor_ssl_ctx_callback(void *curl, void *ssl_ctx, const char *groups) {
+    if (ssl_ctx == NULL || groups == NULL) return 0;
+    return 1 - SSL_CTX_set1_groups_list((SSL_CTX *)ssl_ctx, groups);
+}
+
+static int ktor_allowed_curves_idx = -1;
+
+static void ktor_ssl_info_callback(const SSL *ssl, int where, int ret) {
+    if (!(where & SSL_CB_HANDSHAKE_DONE)) return;
+    if (ret == 0) return;
+
+    int nid = SSL_get_negotiated_group(ssl);
+    const char *curve = OBJ_nid2sn(nid);
+    if (curve == NULL) return;
+
+    SSL_CTX* ctx = SSL_get_SSL_CTX(ssl);
+    const char* allowed = (const char*)SSL_CTX_get_ex_data(ctx, ktor_allowed_curves_idx);
+    if (allowed == NULL) return;
+
+    char* allowed_copy = strdup(allowed);
+    char* token = strtok(allowed_copy, ":");
+    int found = 0;
+    while (token) {
+        if (strcmp(token, curve) == 0) {
+            found = 1;
+            break;
+        }
+        token = strtok(NULL, ":");
+    }
+    free(allowed_copy);
+
+    if (!found) {
+        SSL_set_verify_result((SSL*)ssl, X509_V_ERR_APPLICATION_VERIFICATION);
+    }
+}
+
+static void free_allowed_curves(void *parent, void *ptr, CRYPTO_EX_DATA *ad, int idx, long argl, void *argp) {
+    free(ptr);
+}
+
+static void ktor_install_curve_validator(SSL_CTX *ctx, const char *allowed_curves) {
+    if (ktor_allowed_curves_idx == -1) {
+        ktor_allowed_curves_idx = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, free_allowed_curves);
+    }
+    char* copy = strdup(allowed_curves);
+    SSL_CTX_set_ex_data(ctx, ktor_allowed_curves_idx, (void*)copy);
+}
+
+static void ktor_install_info_callback(SSL_CTX *ctx) {
+    SSL_CTX_set_info_callback(ctx, ktor_ssl_info_callback);
+}

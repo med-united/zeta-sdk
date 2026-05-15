@@ -1,4 +1,5 @@
 import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
+import de.gematik.zeta.sdk.buildlogic.isNativeEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 import org.jetbrains.kotlin.gradle.dsl.ExplicitApiMode
 
@@ -19,14 +20,20 @@ setupBuildLogic {
             api(libs.ktor.serialisation)
             implementation(libs.kstore)
             implementation(libs.kstore.file)
-            implementation("com.squareup.okio:okio:3.9.0")
-            implementation("com.russhwolf:multiplatform-settings:1.3.0")
+            implementation(libs.okio)
+            implementation(libs.multiplatform.settings)
         }
 
         if (project.isJvmEnabled) {
             sourceSets.jvmMain.dependencies {
-                implementation("com.russhwolf:multiplatform-settings-jvm:1.3.0")
+                implementation(libs.multiplatform.settings.jvm)
                 implementation(libs.java.keyring)
+            }
+        }
+
+        if (project.isJvmEnabled){
+            sourceSets.jvmTest.dependencies {
+                implementation(libs.mockk)
             }
         }
 

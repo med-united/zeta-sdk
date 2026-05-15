@@ -57,7 +57,7 @@ class RequestEvaluatorImplTest {
 
     class FakeForwardingClient : ForwardingClient {
         override suspend fun executeOnce(builder: HttpRequestBuilder): ZetaHttpResponse {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
     }
 }

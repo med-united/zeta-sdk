@@ -50,7 +50,6 @@ public class EditPrescriptionViewModel(
     private var model = PrescriptionModel()
 
     internal fun loadPrescription(modelId: Long?) = launch(ioDispatcher) {
-        requireNotNull(id) { "model.id is null" }
         id = modelId ?: -1
         model = repository.prescription(id)
         state.update { EditPrescriptionState.FormUpdated(model) }

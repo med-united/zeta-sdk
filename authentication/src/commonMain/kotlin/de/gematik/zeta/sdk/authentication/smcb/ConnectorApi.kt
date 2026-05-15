@@ -69,10 +69,19 @@ interface ConnectorApi {
     ): ExternalAuthenticateResponse
 }
 
+interface CustomConnectorApi {
+    suspend fun readCertificate(): ByteArray // raw DER certificate
+
+    /**
+     * MUST return raw DER-encoded ECDSA signature bytes
+     */
+    suspend fun externalAuthenticate(base64Challenge: String): ByteArray
+}
+
 class ConnectorApiImpl(
     val config: SmcbTokenProvider.ConnectorConfig,
+    private val httpClientFactory: ((SmcbTokenProvider.ConnectorConfig) -> HttpClient)? = null,
 ) : ConnectorApi {
-
     val xml = XML {
         indentString = ""
         autoPolymorphic = false
@@ -124,24 +133,25 @@ class ConnectorApiImpl(
             .decodeFromSoap(ExternalAuthenticateResponse.serializer(), xml)
     }
 
-    private fun buildHttpClient(cfg: SmcbTokenProvider.ConnectorConfig): HttpClient {
-        return HttpClient {
-            install(DefaultRequest) {
-                url {
-                    takeFrom(cfg.baseUrl)
+    private fun buildHttpClient(cfg: SmcbTokenProvider.ConnectorConfig): HttpClient =
+        httpClientFactory?.invoke(cfg) ?: buildRealHttpClient(cfg)
+
+    private fun buildRealHttpClient(cfg: SmcbTokenProvider.ConnectorConfig): HttpClient = HttpClient {
+        install(DefaultRequest) {
+            url {
+                takeFrom(cfg.baseUrl)
+            }
+        }
+        install(Logging) {
+            level = LogLevel.ALL
+            logger = object : Logger {
+                override fun log(message: String) {
+                    println(message)
                 }
             }
-            install(Logging) {
-                level = LogLevel.ALL
-                logger = object : Logger {
-                    override fun log(message: String) {
-                        println(message)
-                    }
-                }
-            }
-            install(ContentNegotiation) {
-                xml()
-            }
+        }
+        install(ContentNegotiation) {
+            xml()
         }
     }
 }

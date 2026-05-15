@@ -25,31 +25,27 @@
 package de.gematik.zeta.sdk.attestation.interfaces
 
 import io.ktor.http.RequestConnectionPoint
-import kotlinx.cinterop.toKString
-import platform.posix.getenv
 
+@Suppress("UnusedPrivateProperty")
 actual class ProcessMonitor actual constructor(private val allowedExecutables: List<String>) {
+    val notInScopeTarget = "The JVM target is not in scope of the Attestation Service"
     actual fun isRunning(processName: String): Boolean {
         return false
     }
 
     actual fun findSocketAndPid(origin: RequestConnectionPoint): Int? {
-        TODO("Not yet implemented")
+        error(notInScopeTarget)
     }
 
     actual fun getProcessName(pid: Int?): String? {
-        TODO("Not yet implemented")
+        error(notInScopeTarget)
     }
 
     actual fun getProcessExecutablePath(pid: Int?): String? {
-        TODO("Not yet implemented")
+        error(notInScopeTarget)
     }
 
     actual fun isProcessAllowed(origin: RequestConnectionPoint): Boolean {
-        return allowedExecutables.isEmpty()
+        error(notInScopeTarget)
     }
-}
-
-actual fun getEnv(variable: String): String? {
-    return getenv(variable)?.toKString()
 }

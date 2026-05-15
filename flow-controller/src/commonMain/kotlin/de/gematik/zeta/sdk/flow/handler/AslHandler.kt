@@ -51,7 +51,7 @@ class AslHandler(
     override fun canHandle(need: FlowNeed): Boolean = need == FlowNeed.Asl
 
     /**
-     * Evaluates the ASL requirement for the configured [resource].
+     * Evaluates the ASL requirement for the configured resource.
      *
      * - When ASL is **REQUIRED**, returns [CapabilityResult.RetryRequest] with a `mutate` callback
      *   that encrypts the request via [AslApi.encrypt], allowing the caller to resend.
@@ -85,7 +85,13 @@ class AslHandler(
                 }
             }
         } catch (e: AslException) {
-            CapabilityResult.Error("ASL_ERROR", e.message.toString(), e.response.raw)
+            Log.e { "ASL error ${e.errorCode}: ${e.message}" }
+
+            CapabilityResult.Error(
+                internalCode = "ASL_${e.errorCode}",
+                internalMessage = e.message.toString(),
+                httpResponse = e.response.raw,
+            )
         }
     }
 }

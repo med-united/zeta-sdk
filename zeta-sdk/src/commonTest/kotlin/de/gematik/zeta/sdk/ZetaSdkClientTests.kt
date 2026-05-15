@@ -26,10 +26,19 @@ package de.gematik.zeta.sdk
 
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.AuthConfig
+import de.gematik.zeta.sdk.authentication.AuthenticationStorageImpl
 import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
+import de.gematik.zeta.sdk.clientregistration.ClientRegistrationStorageImpl
+import de.gematik.zeta.sdk.clientregistration.model.ClientRegistrationResponse
+import de.gematik.zeta.sdk.configuration.ConfigurationStorageImpl
+import de.gematik.zeta.sdk.configuration.models.ApiVersion
+import de.gematik.zeta.sdk.configuration.models.ApiVersionStatus
+import de.gematik.zeta.sdk.configuration.models.AuthorizationServerMetadata
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
+import de.gematik.zeta.sdk.storage.InMemoryStorage
 import de.gematik.zeta.sdk.storage.SdkStorage
+import de.gematik.zeta.sdk.storage.StorageConfig
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -38,16 +47,22 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+private const val requiredRoleOid = "1.2.276.0.76.4.261"
 
 class ZetaSdkClientTests {
+
+    private val aesTestKey: String = "7aae7xXr8rnzVqjpYbosS0CFMrlprkD7jbVotm0fd"
+    private val resource = "https://fachdienst.example.com"
+    private val authServerIssuer = "https://auth.example.com"
+
     @Test
     fun storageConfig_createsWithDefaults_noParameters() {
         // Arrange & Act
-        val config = StorageConfig()
+        val config = StorageConfig.Default(aesB64Key = aesTestKey)
 
         // Assert
-        assertNull(config.provider)
-        assertEquals("7aae7xXr8rnzVqjpYbosS0CFMrlprkD7jbVotm0fd+w=", config.aesB64Key)
+        assertEquals(aesTestKey, config.aesB64Key)
     }
 
     @Test
@@ -55,22 +70,22 @@ class ZetaSdkClientTests {
         // Arrange
         val mockProvider = object : SdkStorage {
             override suspend fun put(key: String, value: String) {
-                TODO("Not yet implemented")
+                error("not in scope of the test")
             }
 
             override suspend fun get(key: String): String? {
-                TODO("Not yet implemented")
+                error("not in scope of the test")
             }
 
             override suspend fun remove(key: String) {
-                TODO("Not yet implemented")
+                error("not in scope of the test")
             }
 
             override suspend fun clear() {}
         }
 
         // Act
-        val config = StorageConfig(provider = mockProvider)
+        val config = StorageConfig.Custom(provider = mockProvider)
 
         // Assert
         assertEquals(mockProvider, config.provider)
@@ -82,7 +97,7 @@ class ZetaSdkClientTests {
         val customKey = "customBase64Key=="
 
         // Act
-        val config = StorageConfig(aesB64Key = customKey)
+        val config = StorageConfig.Default(aesB64Key = customKey)
 
         // Assert
         assertEquals(customKey, config.aesB64Key)
@@ -91,8 +106,8 @@ class ZetaSdkClientTests {
     @Test
     fun storageConfig_equality_sameValues() {
         // Arrange
-        val config1 = StorageConfig(aesB64Key = "key1")
-        val config2 = StorageConfig(aesB64Key = "key1")
+        val config1 = StorageConfig.Default(aesB64Key = "key1")
+        val config2 = StorageConfig.Default(aesB64Key = "key1")
 
         // Act & Assert
         assertEquals(config1, config2)
@@ -101,8 +116,8 @@ class ZetaSdkClientTests {
     @Test
     fun storageConfig_inequality_differentValues() {
         // Arrange
-        val config1 = StorageConfig(aesB64Key = "key1")
-        val config2 = StorageConfig(aesB64Key = "key2")
+        val config1 = StorageConfig.Default(aesB64Key = "key1")
+        val config2 = StorageConfig.Default(aesB64Key = "key2")
 
         // Act & Assert
         assertNotEquals(config1, config2)
@@ -111,7 +126,7 @@ class ZetaSdkClientTests {
     @Test
     fun storageConfig_copy_createsNewInstance() {
         // Arrange
-        val original = StorageConfig(aesB64Key = "originalKey")
+        val original = StorageConfig.Default(aesB64Key = "originalKey")
 
         // Act
         val copy = original.copy(aesB64Key = "newKey")
@@ -126,27 +141,23 @@ class ZetaSdkClientTests {
         // Arrange
         val mockProvider = object : SdkStorage {
             override suspend fun put(key: String, value: String) {
-                TODO("Not yet implemented")
+                error("not in scope of the test")
             }
 
             override suspend fun get(key: String): String? {
-                TODO("Not yet implemented")
+                error("not in scope of the test")
             }
 
             override suspend fun remove(key: String) {
-                TODO("Not yet implemented")
+                error("not in scope of the test")
             }
 
             override suspend fun clear() {}
         }
-        val config = StorageConfig(provider = mockProvider, aesB64Key = "testKey")
-
-        // Act
-        val (provider, key) = config
+        val config = StorageConfig.Custom(provider = mockProvider)
 
         // Assert
-        assertEquals(mockProvider, provider)
-        assertEquals("testKey", key)
+        assertEquals(mockProvider, config.provider)
     }
 
     @Test
@@ -279,8 +290,8 @@ class ZetaSdkClientTests {
     @Test
     fun buildConfig_createsWithAllParameters_whenProvided() {
         // Arrange
-        val storageConfig = StorageConfig()
-        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")))
+        val storageConfig = StorageConfig.Default(aesB64Key = aesTestKey)
+        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")), requiredRoleOid = "1.2.276.0.76.4.261")
         val platformProductId = PlatformProductId.LinuxProductId("", "", "", "")
 
         // Act
@@ -309,9 +320,9 @@ class ZetaSdkClientTests {
     @Test
     fun buildConfig_createsWithOptionalParameters_whenProvided() {
         // Arrange
-        val storageConfig = StorageConfig()
+        val storageConfig = StorageConfig.Default(aesB64Key = aesTestKey)
         val tpmConfig = object : TpmConfig {}
-        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")))
+        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")), requiredRoleOid = requiredRoleOid)
         val platformProductId = PlatformProductId.LinuxProductId("", "", "", "")
         val httpClientBuilder = ZetaHttpClientBuilder()
         val regCallback = RegistrationCallback { RegInfo("test") }
@@ -340,9 +351,9 @@ class ZetaSdkClientTests {
     @Test
     fun buildConfig_copy_createsNewInstance() {
         // Arrange
-        val storageConfig = StorageConfig()
+        val storageConfig = StorageConfig.Default(aesB64Key = aesTestKey)
         val tpmConfig = object : TpmConfig {}
-        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")))
+        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")), requiredRoleOid = requiredRoleOid)
         val platformProductId = PlatformProductId.LinuxProductId("", "", "", "")
         val original = BuildConfig(
             productId = "product-123",
@@ -365,9 +376,9 @@ class ZetaSdkClientTests {
     @Test
     fun buildConfig_equality_sameValues() {
         // Arrange
-        val storageConfig = StorageConfig()
+        val storageConfig = StorageConfig.Default(aesB64Key = aesTestKey)
         val tpmConfig = object : TpmConfig {}
-        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")))
+        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")), requiredRoleOid = requiredRoleOid)
         val platformProductId = PlatformProductId.LinuxProductId("", "", "", "")
 
         val config1 = BuildConfig(
@@ -488,6 +499,12 @@ class ZetaSdkClientTests {
                 customHeaders: Map<String, String>?,
                 block: suspend DefaultClientWebSocketSession.() -> R,
             ) {}
+
+            override suspend fun status(): Result<SdkStatus> {
+                error("Not in scope of the test")
+            }
+
+            override suspend fun logout(): Result<Unit> = Result.success(Unit)
             override suspend fun close(): Result<Unit> = Result.success(Unit)
         }
 
@@ -495,7 +512,7 @@ class ZetaSdkClientTests {
         val discoverResult = mockClient.discover()
         val registerResult = mockClient.register()
         val authenticateResult = mockClient.authenticate()
-        val closeResult = mockClient.close()
+        val closeResult = mockClient.logout()
 
         // Assert
         assertTrue(discoverResult.isSuccess)
@@ -520,6 +537,12 @@ class ZetaSdkClientTests {
                 customHeaders: Map<String, String>?,
                 block: suspend DefaultClientWebSocketSession.() -> R,
             ) {}
+
+            override suspend fun status(): Result<SdkStatus> {
+                error("not in scope of the test")
+            }
+
+            override suspend fun logout(): Result<Unit> = Result.success(Unit)
             override suspend fun close(): Result<Unit> = Result.success(Unit)
         }
 
@@ -546,8 +569,8 @@ class ZetaSdkClientTests {
     fun tpmConfig_canBeUsedInBuildConfig_asParameter() {
         // Arrange
         val tpmConfig = object : TpmConfig {}
-        val storageConfig = StorageConfig()
-        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")))
+        val storageConfig = StorageConfig.Default(aesB64Key = aesTestKey)
+        val authConfig = AuthConfig(listOf("scopes"), 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")), requiredRoleOid = requiredRoleOid)
         val platformProductId = PlatformProductId.LinuxProductId("", "", "", "")
 
         // Act
@@ -564,4 +587,734 @@ class ZetaSdkClientTests {
         // Assert
         assertEquals(tpmConfig, buildConfig.tpmConfig)
     }
+
+    @Test
+    fun storageConfig_toString_containsEncryptionKey() {
+        // Arrange
+        val config = StorageConfig.Default(aesB64Key = "testKey123")
+
+        // Act
+        val result = config.toString()
+
+        // Assert
+        assertTrue(result.contains("testKey123"))
+    }
+
+    @Test
+    fun storageConfig_hashCode_sameForEqualObjects() {
+        // Arrange
+        val config1 = StorageConfig.Default(aesB64Key = "sameKey")
+        val config2 = StorageConfig.Default(aesB64Key = "sameKey")
+
+        // Act & Assert
+        assertEquals(config1.hashCode(), config2.hashCode())
+    }
+
+    @Test
+    fun storageConfig_hashCode_differentForDifferentObjects() {
+        // Arrange
+        val config1 = StorageConfig.Default(aesB64Key = "key1")
+        val config2 = StorageConfig.Default(aesB64Key = "key2")
+
+        // Act & Assert
+        assertNotEquals(config1.hashCode(), config2.hashCode())
+    }
+
+    @Test
+    fun regInfo_toString_containsClientName() {
+        // Arrange
+        val regInfo = RegInfo(clientName = "MyClient")
+
+        // Act
+        val result = regInfo.toString()
+
+        // Assert
+        assertTrue(result.contains("MyClient"))
+        assertTrue(result.contains("RegInfo"))
+    }
+
+    @Test
+    fun regInfo_hashCode_sameForEqualObjects() {
+        // Arrange
+        val info1 = RegInfo(clientName = "SameName")
+        val info2 = RegInfo(clientName = "SameName")
+
+        // Act & Assert
+        assertEquals(info1.hashCode(), info2.hashCode())
+    }
+
+    @Test
+    fun regInfo_withEmptyClientName_createsValidObject() {
+        // Arrange & Act
+        val regInfo = RegInfo(clientName = "")
+
+        // Assert
+        assertEquals("", regInfo.clientName)
+    }
+
+    @Test
+    fun regInfo_withLongClientName_createsValidObject() {
+        // Arrange
+        val longName = "A".repeat(1000)
+
+        // Act
+        val regInfo = RegInfo(clientName = longName)
+
+        // Assert
+        assertEquals(longName, regInfo.clientName)
+    }
+
+    @Test
+    fun authInfo_toString_containsOtp() {
+        // Arrange
+        val authInfo = AuthInfo(otp = "987654")
+
+        // Act
+        val result = authInfo.toString()
+
+        // Assert
+        assertTrue(result.contains("987654"))
+        assertTrue(result.contains("AuthInfo"))
+    }
+
+    @Test
+    fun authInfo_hashCode_sameForEqualObjects() {
+        // Arrange
+        val info1 = AuthInfo(otp = "123456")
+        val info2 = AuthInfo(otp = "123456")
+
+        // Act & Assert
+        assertEquals(info1.hashCode(), info2.hashCode())
+    }
+
+    @Test
+    fun authInfo_hashCode_sameForBothNull() {
+        // Arrange
+        val info1 = AuthInfo(otp = null)
+        val info2 = AuthInfo(otp = null)
+
+        // Act & Assert
+        assertEquals(info1.hashCode(), info2.hashCode())
+    }
+
+    @Test
+    fun authInfo_withEmptyOtp_createsValidObject() {
+        // Arrange & Act
+        val authInfo = AuthInfo(otp = "")
+
+        // Assert
+        assertEquals("", authInfo.otp)
+    }
+
+    @Test
+    fun authInfo_withNumericOtp_createsValidObject() {
+        // Arrange & Act
+        val authInfo = AuthInfo(otp = "000000")
+
+        // Assert
+        assertEquals("000000", authInfo.otp)
+    }
+
+    @Test
+    fun buildConfig_toString_containsMainFields() {
+        // Arrange
+        val config = createTestBuildConfig()
+
+        // Act
+        val result = config.toString()
+
+        // Assert
+        assertTrue(result.contains("product-123"))
+        assertTrue(result.contains("1.0.0"))
+        assertTrue(result.contains("TestClient"))
+    }
+
+    @Test
+    fun buildConfig_withAllOptionalParameters_createsValidObject() {
+        // Arrange
+        val httpClientBuilder = ZetaHttpClientBuilder()
+        val regCallback = RegistrationCallback { RegInfo("test") }
+        val authCallback = AuthenticationCallback { AuthInfo("otp") }
+
+        // Act
+        val config = BuildConfig(
+            productId = "test",
+            productVersion = "1.0",
+            clientName = "test",
+            storageConfig = StorageConfig.Default(aesB64Key = "7aae7xXr8rnzVqjpYbosS0CFMrlprkD7jbVotm0fd+w="),
+            tpmConfig = object : TpmConfig {},
+            authConfig = createTestAuthConfig(),
+            platformProductId = createTestPlatformProductId(),
+            httpClientBuilder = httpClientBuilder,
+            registrationCallback = regCallback,
+            authenticationCallback = authCallback,
+        )
+
+        // Assert
+        assertNotNull(config.httpClientBuilder)
+        assertNotNull(config.registrationCallback)
+        assertNotNull(config.authenticationCallback)
+    }
+
+    @Test
+    fun buildConfig_copyWithMultipleFields_updatesCorrectly() {
+        // Arrange
+        val original = createTestBuildConfig()
+
+        // Act
+        val copy = original.copy(
+            productId = "new-product",
+            productVersion = "2.0.0",
+            clientName = "NewClient",
+        )
+
+        // Assert
+        assertEquals("new-product", copy.productId)
+        assertEquals("2.0.0", copy.productVersion)
+        assertEquals("NewClient", copy.clientName)
+        assertEquals("product-123", original.productId)
+    }
+
+    @Test
+    fun buildConfig_inequality_differentProductId() {
+        // Arrange
+        val config1 = createTestBuildConfig()
+        val config2 = config1.copy(productId = "different")
+
+        // Act & Assert
+        assertNotEquals(config1, config2)
+    }
+
+    @Test
+    fun buildConfig_inequality_differentProductVersion() {
+        // Arrange
+        val config1 = createTestBuildConfig()
+        val config2 = config1.copy(productVersion = "2.0.0")
+
+        // Act & Assert
+        assertNotEquals(config1, config2)
+    }
+
+    @Test
+    fun buildConfig_withDifferentPlatformProductIds_createsValidConfigs() {
+        // Arrange
+        val baseConfig = createTestBuildConfig()
+
+        val linuxConfig = baseConfig.copy(
+            platformProductId = PlatformProductId.LinuxProductId("linux", "Ubuntu", "app", "1.0"),
+        )
+
+        val appleConfig = baseConfig.copy(
+            platformProductId = PlatformProductId.AppleProductId("apple", "macOS", listOf("com.example")),
+        )
+
+        val windowsConfig = baseConfig.copy(
+            platformProductId = PlatformProductId.WindowsProductId("windows", "11", "app"),
+        )
+
+        // Assert
+        assertNotNull(linuxConfig.platformProductId)
+        assertNotNull(appleConfig.platformProductId)
+        assertNotNull(windowsConfig.platformProductId)
+        assertTrue(linuxConfig.platformProductId is PlatformProductId.LinuxProductId)
+        assertTrue(appleConfig.platformProductId is PlatformProductId.AppleProductId)
+        assertTrue(windowsConfig.platformProductId is PlatformProductId.WindowsProductId)
+    }
+
+    @Test
+    fun registrationCallback_canBeCalledMultipleTimes() = runTest {
+        // Arrange
+        var callCount = 0
+        val callback = RegistrationCallback {
+            callCount++
+            RegInfo("Client-$callCount")
+        }
+
+        // Act
+        val result1 = callback.registrationCb()
+        val result2 = callback.registrationCb()
+
+        // Assert
+        assertEquals(2, callCount)
+        assertEquals("Client-1", result1.clientName)
+        assertEquals("Client-2", result2.clientName)
+    }
+
+    @Test
+    fun authenticationCallback_canBeCalledMultipleTimes() = runTest {
+        // Arrange
+        var callCount = 0
+        val callback = AuthenticationCallback {
+            callCount++
+            AuthInfo("OTP-$callCount")
+        }
+
+        // Act
+        val result1 = callback.authenticationCb()
+        val result2 = callback.authenticationCb()
+
+        // Assert
+        assertEquals(2, callCount)
+        assertEquals("OTP-1", result1.otp)
+        assertEquals("OTP-2", result2.otp)
+    }
+
+    @Test
+    fun registrationCallback_canAccessExternalState() = runTest {
+        // Arrange
+        var externalState = "Initial"
+        val callback = RegistrationCallback {
+            externalState = "Modified"
+            RegInfo("TestClient")
+        }
+
+        // Act
+        callback.registrationCb()
+
+        // Assert
+        assertEquals("Modified", externalState)
+    }
+
+    @Test
+    fun authenticationCallback_canAccessExternalState() = runTest {
+        // Arrange
+        var externalOtp = ""
+        val callback = AuthenticationCallback {
+            externalOtp = "123456"
+            AuthInfo(externalOtp)
+        }
+
+        // Act
+        val result = callback.authenticationCb()
+
+        // Assert
+        assertEquals("123456", externalOtp)
+        assertEquals("123456", result.otp)
+    }
+
+    @Test
+    fun zetaSdkClient_discover_canReturnFailure() = runTest {
+        // Arrange
+        val mockClient = object : ZetaSdkClient {
+            override suspend fun discover(): Result<Unit> = Result.failure(Exception("Discovery failed"))
+            override suspend fun register(): Result<Unit> = Result.success(Unit)
+            override suspend fun authenticate(): Result<Unit> = Result.success(Unit)
+            override fun httpClient(builder: ZetaHttpClientBuilder.() -> Unit): ZetaHttpClient {
+                return ZetaHttpClientBuilder().build()
+            }
+            override suspend fun <R> ws(
+                targetUrl: String,
+                builder: ZetaHttpClientBuilder.() -> Unit,
+                customHeaders: Map<String, String>?,
+                block: suspend DefaultClientWebSocketSession.() -> R,
+            ) {}
+
+            override suspend fun status(): Result<SdkStatus> {
+                error("not in scope of the test")
+            }
+
+            override suspend fun logout(): Result<Unit> = Result.success(Unit)
+            override suspend fun close(): Result<Unit> = Result.success(Unit)
+        }
+
+        // Act
+        val result = mockClient.discover()
+
+        // Assert
+        assertTrue(result.isFailure)
+        assertEquals("Discovery failed", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun zetaSdkClient_register_canReturnFailure() = runTest {
+        // Arrange
+        val mockClient = object : ZetaSdkClient {
+            override suspend fun discover(): Result<Unit> = Result.success(Unit)
+            override suspend fun register(): Result<Unit> = Result.failure(Exception("Registration failed"))
+            override suspend fun authenticate(): Result<Unit> = Result.success(Unit)
+            override fun httpClient(builder: ZetaHttpClientBuilder.() -> Unit): ZetaHttpClient {
+                return ZetaHttpClientBuilder().build()
+            }
+            override suspend fun <R> ws(
+                targetUrl: String,
+                builder: ZetaHttpClientBuilder.() -> Unit,
+                customHeaders: Map<String, String>?,
+                block: suspend DefaultClientWebSocketSession.() -> R,
+            ) {}
+
+            override suspend fun status(): Result<SdkStatus> {
+                error("not in scope of the test")
+            }
+
+            override suspend fun logout(): Result<Unit> = Result.success(Unit)
+            override suspend fun close(): Result<Unit> = Result.success(Unit)
+        }
+
+        // Act
+        val result = mockClient.register()
+
+        // Assert
+        assertTrue(result.isFailure)
+        assertEquals("Registration failed", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun zetaSdkClient_authenticate_canReturnFailure() = runTest {
+        // Arrange
+        val mockClient = object : ZetaSdkClient {
+            override suspend fun discover(): Result<Unit> = Result.success(Unit)
+            override suspend fun register(): Result<Unit> = Result.success(Unit)
+            override suspend fun authenticate(): Result<Unit> = Result.failure(Exception("Auth failed"))
+            override fun httpClient(builder: ZetaHttpClientBuilder.() -> Unit): ZetaHttpClient {
+                return ZetaHttpClientBuilder().build()
+            }
+            override suspend fun <R> ws(
+                targetUrl: String,
+                builder: ZetaHttpClientBuilder.() -> Unit,
+                customHeaders: Map<String, String>?,
+                block: suspend DefaultClientWebSocketSession.() -> R,
+            ) {}
+
+            override suspend fun status(): Result<SdkStatus> {
+                error("not in scope of the test")
+            }
+
+            override suspend fun logout(): Result<Unit> = Result.success(Unit)
+            override suspend fun close(): Result<Unit> = Result.success(Unit)
+        }
+
+        // Act
+        val result = mockClient.authenticate()
+
+        // Assert
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun zetaSdkClient_close_canReturnFailure() = runTest {
+        // Arrange
+        val mockClient = object : ZetaSdkClient {
+            override suspend fun discover(): Result<Unit> = Result.success(Unit)
+            override suspend fun register(): Result<Unit> = Result.success(Unit)
+            override suspend fun authenticate(): Result<Unit> = Result.success(Unit)
+            override fun httpClient(builder: ZetaHttpClientBuilder.() -> Unit): ZetaHttpClient {
+                return ZetaHttpClientBuilder().build()
+            }
+            override suspend fun <R> ws(
+                targetUrl: String,
+                builder: ZetaHttpClientBuilder.() -> Unit,
+                customHeaders: Map<String, String>?,
+                block: suspend DefaultClientWebSocketSession.() -> R,
+            ) {}
+
+            override suspend fun status(): Result<SdkStatus> {
+                error("Status not used")
+            }
+
+            override suspend fun logout(): Result<Unit> = Result.failure(Exception("Close failed"))
+            override suspend fun close(): Result<Unit> = Result.success(Unit)
+        }
+
+        // Act
+        val result = mockClient.logout()
+
+        // Assert
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun zetaSdkClient_httpClient_withMultipleConfigurations() {
+        // Arrange
+        val mockClient = object : ZetaSdkClient {
+            override suspend fun discover(): Result<Unit> = Result.success(Unit)
+            override suspend fun register(): Result<Unit> = Result.success(Unit)
+            override suspend fun authenticate(): Result<Unit> = Result.success(Unit)
+            override fun httpClient(builder: ZetaHttpClientBuilder.() -> Unit): ZetaHttpClient {
+                return ZetaHttpClientBuilder().apply(builder).build()
+            }
+            override suspend fun <R> ws(
+                targetUrl: String,
+                builder: ZetaHttpClientBuilder.() -> Unit,
+                customHeaders: Map<String, String>?,
+                block: suspend DefaultClientWebSocketSession.() -> R,
+            ) {}
+
+            override suspend fun status(): Result<SdkStatus> {
+                error("status not used in test")
+            }
+
+            override suspend fun logout(): Result<Unit> = Result.success(Unit)
+            override suspend fun close(): Result<Unit> = Result.success(Unit)
+        }
+
+        // Act
+        val client1 = mockClient.httpClient {
+            timeouts(connectMs = 1000)
+        }
+        val client2 = mockClient.httpClient {
+            timeouts(connectMs = 5000)
+            disableServerValidation(true)
+        }
+
+        // Assert
+        assertNotNull(client1)
+        assertNotNull(client2)
+        client1.close()
+        client2.close()
+    }
+
+    private fun createTestBuildConfig(): BuildConfig {
+        return BuildConfig(
+            productId = "product-123",
+            productVersion = "1.0.0",
+            clientName = "TestClient",
+            storageConfig = StorageConfig.Default(aesB64Key = "7aae7xXr8rnzVqjpYbosS0CFMrlprkD7jbVotm0fd+w="),
+            tpmConfig = object : TpmConfig {},
+            authConfig = createTestAuthConfig(),
+            platformProductId = createTestPlatformProductId(),
+        )
+    }
+    private fun buildClientWithStorage(storage: SdkStorage): ZetaSdkClient {
+        val config = createTestBuildConfig(storage)
+        return ZetaSdk.build(resource, config)
+    }
+
+    @Test
+    fun `status returns NOT_REGISTERED when storage is empty`() = runTest {
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+
+        val result = client.status()
+
+        assertTrue(result.isSuccess)
+        assertEquals(SdkStatus.NOT_REGISTERED, result.getOrThrow())
+    }
+
+    @Test
+    fun `status returns NOT_REGISTERED when auth server linked but registration missing`() = runTest {
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+
+        ConfigurationStorageImpl(storage).linkResourceToAuthorizationServer(
+            resource,
+            getAuthServer(authServerIssuer),
+        )
+
+        val result = client.status()
+
+        assertTrue(result.isSuccess)
+        assertEquals(SdkStatus.NOT_REGISTERED, result.getOrThrow())
+    }
+
+    @Test
+    fun `status returns REGISTERED_NO_VALID_TOKENS when registered but no tokens saved`() = runTest {
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+        setupRegistration(storage)
+
+        val result = client.status()
+
+        assertTrue(result.isSuccess)
+        assertEquals(SdkStatus.REGISTERED_NO_VALID_TOKENS, result.getOrThrow())
+    }
+
+    @Test
+    fun `status returns REGISTERED_NO_VALID_TOKENS when tokens are expired and no refresh token`() = runTest {
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+        setupRegistration(storage)
+        setupTokens(
+            storage,
+            accessToken = "access-token",
+            refreshToken = "", // no refresh token
+            expiresAt = Clock.System.now().epochSeconds - 60,
+        )
+
+        val result = client.status()
+
+        assertTrue(result.isSuccess)
+        assertEquals(SdkStatus.REGISTERED_NO_VALID_TOKENS, result.getOrThrow())
+    }
+
+    @Test
+    fun `status returns REGISTERED_NO_VALID_TOKENS when expiresAt is zero and no refresh token`() = runTest {
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+        setupRegistration(storage)
+        setupTokens(
+            storage,
+            accessToken = "access-token",
+            refreshToken = "", // no refresh token
+            expiresAt = 0L,
+        )
+
+        val result = client.status()
+
+        assertTrue(result.isSuccess)
+        assertEquals(SdkStatus.REGISTERED_NO_VALID_TOKENS, result.getOrThrow())
+    }
+
+    @Test
+    fun `status returns HAS_REFRESH_TOKEN when only refresh token present`() = runTest {
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+        setupRegistration(storage)
+        setupTokens(
+            storage, accessToken = "", refreshToken = "refresh-token",
+            expiresAt = Clock.System.now().epochSeconds + 3600,
+        )
+
+        val result = client.status()
+
+        assertTrue(result.isSuccess)
+        assertEquals(SdkStatus.HAS_REFRESH_TOKEN, result.getOrThrow())
+    }
+
+    @Test
+    fun `status returns HAS_REFRESH_TOKEN when tokens expired but refresh token present`() = runTest {
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+        setupRegistration(storage)
+        setupTokens(
+            storage, accessToken = "access-token", refreshToken = "refresh-token",
+            expiresAt = Clock.System.now().epochSeconds - 60,
+        )
+
+        val result = client.status()
+
+        assertTrue(result.isSuccess)
+        assertEquals(SdkStatus.HAS_REFRESH_TOKEN, result.getOrThrow())
+    }
+
+    @Test
+    fun `status returns HAS_ACCESS_AND_REFRESH_TOKEN when both tokens are valid`() = runTest {
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+        setupRegistration(storage)
+        setupTokens(storage)
+
+        val result = client.status()
+
+        assertTrue(result.isSuccess)
+        assertEquals(SdkStatus.HAS_ACCESS_AND_REFRESH_TOKEN, result.getOrThrow())
+    }
+
+    @Test
+    fun `status returns HAS_ACCESS_AND_REFRESH_TOKEN when expiry is in the future by 1 second`() = runTest {
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+        setupRegistration(storage)
+        setupTokens(storage, expiresAt = Clock.System.now().epochSeconds + 1)
+
+        val result = client.status()
+
+        assertTrue(result.isSuccess)
+        assertEquals(SdkStatus.HAS_ACCESS_AND_REFRESH_TOKEN, result.getOrThrow())
+    }
+
+    @Test
+    fun `status reflects tokens written by authenticate flow`() = runTest {
+        // Arrange
+        val storage = InMemoryStorage()
+        val client = buildClientWithStorage(storage)
+        setupRegistration(storage)
+        setupTokens(storage)
+
+        client.discover()
+        client.register()
+        client.authenticate()
+
+        // Act
+        val result = client.status()
+
+        // Assert
+        assertEquals(SdkStatus.HAS_ACCESS_AND_REFRESH_TOKEN, result.getOrThrow())
+    }
+
+    private suspend fun setupRegistration(storage: SdkStorage) {
+        ConfigurationStorageImpl(storage).linkResourceToAuthorizationServer(
+            resource,
+            getAuthServer(authServerIssuer),
+        )
+        ClientRegistrationStorageImpl(storage).saveRegistration(
+            authServer = authServerIssuer,
+            registrationResponse = ClientRegistrationResponse(clientId = "client-123"),
+        )
+    }
+
+    private suspend fun setupTokens(
+        storage: SdkStorage,
+        accessToken: String = "access-token",
+        refreshToken: String = "refresh-token",
+        expiresAt: Long = Clock.System.now().epochSeconds + 3600,
+    ) {
+        AuthenticationStorageImpl(storage).saveAccessTokens(
+            fqdn = resource,
+            accessToken = accessToken,
+            refreshToken = refreshToken,
+            expiresAt = expiresAt,
+        )
+    }
+}
+
+private fun createTestBuildConfig(storage: SdkStorage? = InMemoryStorage()): BuildConfig {
+    return BuildConfig(
+        productId = "product-123",
+        productVersion = "1.0.0",
+        clientName = "TestClient",
+        storageConfig = StorageConfig.Custom(storage!!),
+        tpmConfig = object : TpmConfig {},
+        authConfig = createTestAuthConfig(),
+        platformProductId = createTestPlatformProductId(),
+    )
+}
+
+private fun createTestAuthConfig(): AuthConfig {
+    return AuthConfig(
+        listOf("test:audience"),
+        300,
+        false,
+        SmbTokenProvider(
+            SmbTokenProvider.Credentials("", "", ""),
+        ),
+        requiredRoleOid = requiredRoleOid,
+    )
+}
+
+private fun createTestPlatformProductId(): PlatformProductId {
+    return PlatformProductId.LinuxProductId(
+        platform = "linux",
+        "",
+        "test",
+        "1.0",
+    )
+}
+
+private fun getAuthServer(resource: String): AuthorizationServerMetadata {
+    return AuthorizationServerMetadata(
+        issuer = resource,
+        authorizationEndpoint = "",
+        tokenEndpoint = "token_endpoint",
+        nonceEndpoint = "",
+        openidProvidersEndpoint = "test open id",
+        jwksUri = "",
+        scopesSupported = listOf(""),
+        responseTypesSupported = listOf("TOKEN"),
+        responseModesSupported = listOf(""),
+        grantTypesSupported = listOf(""),
+        tokenEndpointAuthMethodsSupported = listOf(""),
+        tokenEndpointAuthSigningAlgValuesSupported = listOf(""),
+        serviceDocumentation = "",
+        uiLocalesSupported = listOf(""),
+        codeChallengeMethodsSupported = listOf(""),
+        apiVersionsSupported =
+        listOf(
+            ApiVersion(
+                majorVersion = 1,
+                version = "",
+                status = ApiVersionStatus.STABLE,
+                documentationUri = "",
+            ),
+        ),
+    )
 }

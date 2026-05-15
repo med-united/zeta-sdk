@@ -1,5 +1,3 @@
-<img align="right" width="250" height="47" src="docs/img/Gematik_Logo_Flag.png"/> <br/>
-
 # zeta-sdk
 
 This document describes how to use the ZETA SDK, and how to build and run the provided
@@ -242,7 +240,8 @@ Here are the items you need to adapt:
 | WS_SERVER_CONTEXT_PATH    | Specifies the base context to target the resource server. It is used in the Java client to prefix STOMP Websockets destinations                        | /testfachdienst                                            |
 | WS_BASE_URL               | Defines the Websocket base URL (including protocol: ws/wss)                                                                                            | wss://host/resource/ws                                     |
 | ASL_PROD                  | Defines whether the client runs in Productive or Non Productive mode. If set to "false" exposes the ASL symmetric keys: K2_c2s_app_data and K2_s2c_app | by default is set to "true" (productive environment)       |
-
+| STORAGE_AES_KEY           | Base64-encoded AES-256 key used to encrypt session data at rest                                                                                        | 7aae7xXr8rnzVqjpYbosS0CFMrlprkD7jbVotm0fd                  |
+| REQUIRED_ROLE_OID         | Role-OID that the TI certificate must contain. Required for ASL handshake validation                                                                   | 1.2.276.0.76.4.156                                         |
 
 Note that two sets of configuration variables for the SM(C)-B client authentication are provided,
 one for the SM-B certificate file, another for the SMC-B connector interface.
@@ -366,7 +365,8 @@ the Fachdienst, but also control the client and extract information necessary fo
 | /testdriver-api/register     | GET              | Perform client registration (includes discovery if not already done)                                                                                                                                                                |
 | /testdriver-api/authenticate | GET              | Retrieve and store an access token (includes client registration and discovery if not already done)                                                                                                                                 |
 | /testdriver-api/storage      | GET              | Retrieve the stored data (like client instance key, access token etc)                                                                                                                                                               |
-| /testdriver-api/reset        | GET              | forget all the stored information, so any call will start triggering a discovery, client registration and authentication again                                                                                                      |
+| /testdriver-api/reset        | GET              | Forget all the stored information, so any call will start triggering a discovery, client registration and authentication again                                                                                                      |
+| /testdriver-api/configure    | POST             | Configures the test driver with the provided settings, including TLS validation, resource URL, and custom CA certificate                                                                                                            |
 | /health                      | GET              | health API for kubernetes                                                                                                                                                                                                           |
 
 *Note: in coming project milestones the paths may change or be extended to accomodate for multiple client instance running in parallel*
@@ -691,7 +691,13 @@ Notes:
 - `--ulimit` is required to avoid the error "Too many open files"
 - During the first start gradle downloads the Kotlin Native Toolchain (~ 300MB)
 
+## C# Client
+
+The C# client has its own [README file](zeta-client-csharp).
+
 ## The attestation service
+
+*NOTE: this will only be relevant in a later version of the specification! It is currently not used or required.*
 
 The attestation service is a service that runs locally alongside the Zeta SDK client.
 It provides TPM-based attestation capabilities for Windows and Linux, allowing the SDK
@@ -790,7 +796,7 @@ class ZetaSdkTest {
                 "demo-client",
                 "0.2.0",
                 "client-sdk",
-                StorageConfig(),
+                StorageConfig(aesB64Key = "7aae7xXr8rnzVqjpYbosS0CFMrlprkD7jbVotm0fd"),
                 object : TpmConfig {},
                 AuthConfig(
                     listOf(
@@ -800,6 +806,7 @@ class ZetaSdkTest {
                     true,
                     SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")),
                     AttestationConfig.software(),
+                    requiredRoleOid = "1.2.276.0.76.4.156",
                 ),
             ),
         )
@@ -834,21 +841,32 @@ depending on the state of the implementation according to the project milestones
 
 The ZETA API offers the following public API:
 
-| Operation                    | Description                                                                                                                                               | Return value         | Errors                                                                                                                                                                                   |
-|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| build(resource, BuildConfig) | static method to create a new SDK client instance                                                                                                         |
-| forget()                 | static method to clear all cached information for the FQDN, like instance key, well-known files, or access tokens. This method is mostly used for testing |
-| discover()                   | Perform discovery and configuration, i.e. mainly reading the well-known files                                                                             |
-| register()                   | Perform client registration; includes discovery and configuration if not already done                                                                     |
-| authenticate()               | perform the authentication; includes client registration and discovery and configuration if not alreaady done                                             |
-| httpClient()                 | Returns an HttpClient with overloaded method that implement the ZETA specific protocol; this includes authentication etc if not already done              |                      |
-| close()                      | Closing the ZETA SDK client without forgetting the cached information                                                                                     | -                    | error codes                                                                                                                                                                              |
+| Operation                    | Description                                                                                                                                               | Return value   | Errors      |
+|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|-------------|
+| build(resource, BuildConfig) | static method to create a new SDK client instance                                                                                                         |                |             |
+| forget()                     | static method to clear all cached information for the FQDN, like instance key, well-known files, or access tokens. This method is mostly used for testing |                |             |
+| discover()                   | Perform discovery and configuration, i.e. mainly reading the well-known files                                                                             |                |             |
+| register()                   | Perform client registration; includes discovery and configuration if not already done                                                                     |                |             |
+| authenticate()               | perform the authentication; includes client registration and discovery and configuration if not alreaady done                                             |                |             |
+| httpClient()                 | Returns an HttpClient with overloaded method that implement the ZETA specific protocol; this includes authentication etc if not already done              |                |             |
+| status()                     | Returns the current state of the client instance                                                                                                          | SdkStatus enum |             |
+| logout()                     | Clears the stored authentication tokens                                                                                                                   |                |             |
+| close()                      | Closing the ZETA SDK client without forgetting the cached information                                                                                     | -              | error codes |
 
 Inside the HTTP operations as provided by the HttpClient, the discovery, client registration and authentication are performed automatically.
 The methods discover(), register(), and authenticate() are idempotent.
 Providing them separately allows the client to implement flexible UI flows in case there is any client interaction needed.
 For example the authentication could be done at start without an actual call to the Fachdienst, so that any later Fachdienst call
 is then uninterrupted by manual interaction.
+
+The `status()` method returns one of the following values:
+
+| Value                         | Description                                                 |
+|-------------------------------|-------------------------------------------------------------|
+| NOT_REGISTERED                | Client has never registered:  discover/register required    |
+| REGISTERED_NO_VALID_TOKENS    | Client is registered but all tokens are missing or expired  |
+| HAS_REFRESH_TOKEN             | Client has a valid refresh token but no access token        |
+| HAS_ACCESS_AND_REFRESH_TOKEN  | Client has both a valid access token and a refresh token    |
 
 ### Configuration
 
@@ -875,17 +893,19 @@ Details are still to be determined.
 
 The AuthConfig object configures the authentication process:
 
-| Attribute            | Description                                                                                                         |
-|----------------------|---------------------------------------------------------------------------------------------------------------------|
-| scopes               | Scope-values for the Access Tokens                                                                                  |
-| exp                  | The expiration time of the JWT as lifetime duration in seconds                                                      |
-| aslProdEnvironment   | Determines if the client runs non/production environment. The ASL keys can be accessed if it is set to false        |
-| subjectTokenProvider | a class that provides a subject token, either SM-B or SMC-B depending on the implementation                         |
-| attestation          | Configures the attestation mode and connection to the attestation service. Defaults to AttestationConfig.software   |
+| Attribute            | Description                                                                                                       |
+|----------------------|-------------------------------------------------------------------------------------------------------------------|
+| scopes               | Scope-values for the Access Tokens                                                                                |
+| exp                  | The expiration time of the JWT as lifetime duration in seconds                                                    |
+| aslProdEnvironment   | Determines if the client runs non/production environment. The ASL keys can be accessed if it is set to false      |
+| subjectTokenProvider | a class that provides a subject token, either SM-B or SMC-B depending on the implementation                       |
+| attestation          | Configures the attestation mode and connection to the attestation service. Defaults to AttestationConfig.software |
+| requiredRoleOid      | Role-OID the TI certificate must contain (e.g. `1.2.276.0.76.4.156` for `oid_epa_vau`)                            |
+
 
 #### AttestationConfig
 
-The attestation config allows three atteatation modes:
+The attestation config allows three attestation modes:
 
 | Mode      | Factory method                | Description                                                                                                                        |
 |-----------|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
@@ -895,8 +915,95 @@ The attestation config allows three atteatation modes:
 
 ### StorageConfig
 
-This interface provides a simple Map-type storage interface that is used
-to save the session information.
+Configures how the SDK stores session data. There are two mutually exclusive options:
+
+---
+
+#### `StorageConfig.Default`
+Uses the SDK's built-in encrypted storage. This is the recommended option for production.
+
+| Parameter   | Type     | Required | Description                                                      |
+|-------------|----------|----------|------------------------------------------------------------------|
+| `aesB64Key` | `String` | **Yes**  | Base64-encoded AES-256 key used to encrypt session data at rest. |
+
+##### Requirements for `aesB64Key`
+- Must be a **Base64-encoded string**
+- Must decode to **exactly 32 bytes** (256 bits)
+- Passing an invalid key will cause a runtime error during encryption/decryption
+
+> If the decoded key is not exactly 32 bytes, the SDK will throw:
+> `IllegalArgumentException: Key must be 32 bytes`
+
+**Security notice:** Keep this key secret. Store it in a secure vault or environment variable, do not hardcode it in source code.
+
+---
+
+#### `StorageConfig.Custom`
+Delegates storage entirely to your own implementation of `SdkStorage`. When using this option, encryption is the responsibility of the provided implementation.
+
+| Parameter  | Type         | Required | Description                    |
+|------------|--------------|----------|--------------------------------|
+| `provider` | `SdkStorage` | **Yes**  | Custom storage implementation. |
+
+This is useful for testing or environments where you manage persistence yourself:
+```kotlin
+val config = StorageConfig.Custom(provider = MemoryStorage())
+```
+
+### Custom SMC-B Connector
+
+You can provide your own implementation by injecting a custom connector via the `AuthConfig`.
+This is useful when you already have an existing SMC-B connector implementation, or when you want to control how the certificate and signing operations are performed.
+
+**Interface:**
+
+| Method                                  | Description                                                                  |
+|-----------------------------------------|------------------------------------------------------------------------------|
+| `readCertificate()`                     | Return the SMC-B X.509 certificate in DER format                             |
+| `externalAuthenticate(base64Challenge)` | Sign the base64-encoded challenge and return the DER-encoded ECDSA signature |
+
+---
+
+### Custom Storage
+
+By default, the SDK uses platform-specific encrypted storage. You can replace this with your own storage implementation.
+When using a custom storage provider, encryption is the responsibility of the implementation - the `aesB64Key` is ignored.
+All pointers must remain valid for the lifetime of the SDK instance.
+
+**Interface:**
+
+| Method              | Description                              |
+|---------------------|------------------------------------------|
+| `put(key, value)`   | Store a value for the given key          |
+| `get(key)`          | Retrieve the value for the given key     |
+| `remove(key)`       | Delete the entry for the given key       |
+| `clear()`           | Delete all stored entries                |
+
+---
+
+### Custom Log Provider
+
+By default, the SDK logs to stdout. You can redirect log output to your own logging system.
+The default log level is `ERROR`. The callback is invoked synchronously from SDK internal threads - implementations must be thread-safe. When a custom logger is set, stdout output is suppressed.
+
+**Interface:**
+
+| Method                        | Description            |
+|-------------------------------|------------------------|
+| `d(tag, message, throwable)`  | Log a DEBUG message    |
+| `i(tag, message, throwable)`  | Log an INFO message    |
+| `w(tag, message, throwable)`  | Log a WARN message     |
+| `e(tag, message, throwable)`  | Log an ERROR message   |
+
+**Log levels:**
+
+| Level   | Description                          |
+|---------|--------------------------------------|
+| `DEBUG` | All messages including verbose debug |
+| `INFO`  | Informational messages and above     |
+| `WARN`  | Warnings and errors only             |
+| `ERROR` | Errors only (default)                |
+| `NONE`  | No logging                           |
 
 ### ZetaHttpClientBuilder
 
@@ -930,3 +1037,4 @@ See the [LICENSE](./LICENSE) for the specific language governing permissions and
    2. The software is provided "as is" without warranty of any kind, either express or implied, including, but not limited to, the warranties of fitness for a particular purpose, merchantability, and/or non-infringement. The authors or copyright holders shall not be liable in any manner whatsoever for any damages or other claims arising from, out of or in connection with the software or the use or other dealings with the software, whether in an action of contract, tort, or otherwise.
    3. We take open source license compliance very seriously. We are always striving to achieve compliance at all times and to improve our processes. If you find any issues or have any suggestions or comments, or if you see any other ways in which we can improve, please reach out to: ospo@gematik.de
 3. Please note: Parts of this code may have been generated using AI-supported technology. Please take this into account, especially when troubleshooting, for security analyses and possible adjustments.
+

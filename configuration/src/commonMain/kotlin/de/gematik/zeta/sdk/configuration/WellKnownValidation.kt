@@ -32,7 +32,7 @@ import kotlinx.serialization.json.Json
 /**
  * Contract for validating a well-known JSON document against a JSON Schema.
  */
-interface WellKnownSchemaValidation {
+fun interface WellKnownSchemaValidation {
     suspend fun validate(resource: String, schema: String): Boolean
 }
 

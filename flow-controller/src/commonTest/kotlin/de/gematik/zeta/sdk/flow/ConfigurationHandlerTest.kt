@@ -227,7 +227,7 @@ class ConfigurationHandlerTest {
             ),
             authJson = mapOf(resource to Json.encodeToString(getDummyAuthServerObject(resource))),
         )
-        val validator = FakeValidator(isValid = true, 0, true)
+        val validator = FakeValidator(isValid = true, 0, false)
         val h = ConfigurationHandler(api, createAuthConfig(listOf("missing_scope")), validator)
         val ctx = getDummyFlowContext()
 
@@ -239,5 +239,8 @@ class ConfigurationHandlerTest {
     }
 
     private fun createAuthConfig(scopes: List<String> = emptyList()) =
-        AuthConfig(scopes, 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")))
+        AuthConfig(
+            scopes, 300, true,
+            SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")), requiredRoleOid = "1.2.276.0.76.4.261",
+        )
 }

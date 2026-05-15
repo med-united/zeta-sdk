@@ -30,11 +30,12 @@ import io.ktor.http.contentType
 import io.ktor.util.appendAll
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.future.future
 import java.util.concurrent.CompletableFuture
 
 public object HttpClientExtension {
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     @JvmStatic
     public fun ZetaHttpClient.getAsync(url: String): CompletableFuture<ZetaHttpResponse> =

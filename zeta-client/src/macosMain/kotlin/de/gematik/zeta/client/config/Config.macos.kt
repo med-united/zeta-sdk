@@ -41,8 +41,7 @@ public actual fun getConfig(key: String): String? =
 private val values: Map<String, String> by lazy {
     val path = CliArgs.get(zetaEnvFile)
         ?: getenv(zetaEnvFile)?.toKString()
-
-    checkNotNull(path)
+        ?: return@lazy emptyMap()
 
     if (!FileSystem.SYSTEM.exists(path.toPath())) return@lazy emptyMap()
 

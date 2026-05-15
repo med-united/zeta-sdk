@@ -32,7 +32,6 @@ import de.gematik.zeta.sdk.crypto.openssl.ASN1_TYPE
 import de.gematik.zeta.sdk.crypto.openssl.ASN1_TYPE_free
 import de.gematik.zeta.sdk.crypto.openssl.BIO_free
 import de.gematik.zeta.sdk.crypto.openssl.BIO_new_mem_buf
-import de.gematik.zeta.sdk.crypto.openssl.CRYPTO_free
 import de.gematik.zeta.sdk.crypto.openssl.ERR_error_string
 import de.gematik.zeta.sdk.crypto.openssl.ERR_get_error
 import de.gematik.zeta.sdk.crypto.openssl.EVP_PKEY
@@ -73,7 +72,7 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.readBytes
+import kotlinx.cinterop.readBytes // NOSONAR false positive - is required
 import kotlinx.cinterop.refTo
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.toKString
@@ -198,63 +197,64 @@ actual class X509PemReader {
         targetOid: String,
     ): String? {
         if (seq == null) return null
-
-        val count = sk_ASN1_TYPE_num(seq)
-        for (i in 0 until count) {
-            val node = sk_ASN1_TYPE_value(seq, i) ?: continue
-
-            when (node.pointed.type) {
-                V_ASN1_OBJECT -> {
-                    val obj = node.pointed.value.`object` ?: continue
-                    val buf = ByteArray(128)
-                    OBJ_obj2txt(buf.refTo(0), buf.size.convert(), obj, 1)
-                    val oidStr = buf.toKString()
-
-                    if (oidStr == targetOid) {
-                        if (parent != null) {
-                            val pcount = sk_ASN1_TYPE_num(parent)
-                            for (j in 0 until pcount) {
-                                val pnode = sk_ASN1_TYPE_value(parent, j) ?: continue
-                                if (pnode.pointed.type == V_ASN1_PRINTABLESTRING) {
-                                    val ps = pnode.pointed.value.printablestring ?: continue
-                                    val len = ASN1_STRING_length(ps)
-                                    val data = ASN1_STRING_get0_data(ps) ?: continue
-                                    return data.readBytes(len).toKString()
-                                }
-                            }
-                        }
-                    }
-                }
-
-                V_ASN1_SEQUENCE -> {
-                    val seqString = node.pointed.value.asn1_string ?: continue
-                    val derPtr = ASN1_STRING_get0_data(seqString)?.reinterpret<UByteVar>() ?: continue
-                    val len = ASN1_STRING_length(seqString)
-
-                    memScoped {
-                        val pDer = alloc<CPointerVar<UByteVar>>()
-                        pDer.value = derPtr
-
-                        val childSeq = d2i_ASN1_SEQUENCE_ANY(null, pDer.ptr, len.convert())
-                        if (childSeq != null) {
-                            val found = findRegistrationNumber(childSeq, seq, targetOid)
-
-                            val childCount = sk_ASN1_TYPE_num(childSeq)
-                            for (k in 0 until childCount) {
-                                val cnode = sk_ASN1_TYPE_value(childSeq, k)
-                                if (cnode != null) ASN1_TYPE_free(cnode)
-                            }
-
-                            sk_ASN1_TYPE_free(childSeq)
-
-                            if (found != null) return found
-                        }
-                    }
-                }
+        for (i in 0 until asn1TypeNum(seq)) {
+            val node = asn1TypeValue(seq, i) ?: continue
+            val result = when (node.pointed.type) {
+                V_ASN1_OBJECT -> handleOidNode(node, parent, targetOid)
+                V_ASN1_SEQUENCE -> handleSequenceNode(node, seq, targetOid)
+                else -> null
             }
+            if (result != null) return result
         }
-
         return null
+    }
+
+    private fun handleOidNode(
+        node: CPointer<ASN1_TYPE>,
+        parent: CPointer<cnames.structs.stack_st_ASN1_TYPE>?,
+        targetOid: String,
+    ): String? {
+        val obj = node.pointed.value.`object` ?: return null
+        val buf = ByteArray(128)
+        OBJ_obj2txt(buf.refTo(0), buf.size.convert(), obj, 1)
+        if (buf.toKString() != targetOid) return null
+        return parent?.let { findPrintableString(it) }
+    }
+
+    private fun findPrintableString(parent: CPointer<cnames.structs.stack_st_ASN1_TYPE>): String? {
+        for (j in 0 until asn1TypeNum(parent)) {
+            val pnode = asn1TypeValue(parent, j) ?: continue
+            if (pnode.pointed.type != V_ASN1_PRINTABLESTRING) continue
+            val ps = pnode.pointed.value.printablestring ?: continue
+            val data = ASN1_STRING_get0_data(ps) ?: continue
+            return data.readBytes(ASN1_STRING_length(ps)).toKString()
+        }
+        return null
+    }
+
+    private fun handleSequenceNode(
+        node: CPointer<ASN1_TYPE>,
+        parent: CPointer<cnames.structs.stack_st_ASN1_TYPE>,
+        targetOid: String,
+    ): String? {
+        val seqString = node.pointed.value.asn1_string ?: return null
+        val derPtr = ASN1_STRING_get0_data(seqString)?.reinterpret<UByteVar>() ?: return null
+        return memScoped {
+            val pDer = alloc<CPointerVar<UByteVar>>()
+            pDer.value = derPtr
+            val childSeq = d2i_ASN1_SEQUENCE_ANY(null, pDer.ptr, ASN1_STRING_length(seqString).convert())
+                ?: return@memScoped null
+            val found = findRegistrationNumber(childSeq, parent, targetOid)
+            freeSequence(childSeq)
+            found
+        }
+    }
+
+    private fun freeSequence(seq: CPointer<cnames.structs.stack_st_ASN1_TYPE>) {
+        for (k in 0 until asn1TypeNum(seq)) {
+            asn1TypeValue(seq, k)?.let { ASN1_TYPE_free(it) }
+        }
+        asn1TypeFree(seq)
     }
 }
 
@@ -269,28 +269,23 @@ fun getOpenSSLErrors(): String {
     return sb.toString()
 }
 
-@Suppress("FunctionNaming")
-private fun OPENSSL_free(ptr: CPointer<*>?) {
-    CRYPTO_free(ptr, "", 0)
-}
-
-@Suppress("UNCHECKED_CAST", "FunctionNaming")
-private fun sk_ASN1_TYPE_num(
+@Suppress("UNCHECKED_CAST")
+private fun asn1TypeNum(
     sk: CValuesRef<cnames.structs.stack_st_ASN1_TYPE>?,
 ): Int {
     return OPENSSL_sk_num(ossl_check_const_ASN1_TYPE_sk_type(sk))
 }
 
-@Suppress("UNCHECKED_CAST", "FunctionNaming")
-private fun sk_ASN1_TYPE_value(
+@Suppress("UNCHECKED_CAST")
+private fun asn1TypeValue(
     sk: CValuesRef<cnames.structs.stack_st_ASN1_TYPE>?,
     idx: Int,
 ): CPointer<ASN1_TYPE>? {
     return OPENSSL_sk_value(ossl_check_const_ASN1_TYPE_sk_type(sk), idx) as CPointer<ASN1_TYPE>?
 }
 
-@Suppress("UNCHECKED_CAST", "FunctionNaming")
-private fun sk_ASN1_TYPE_free(
+@Suppress("UNCHECKED_CAST")
+private fun asn1TypeFree(
     sk: CValuesRef<cnames.structs.stack_st_ASN1_TYPE>?,
 ) {
     return OPENSSL_sk_free(ossl_check_const_ASN1_TYPE_sk_type(sk))

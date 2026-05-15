@@ -91,9 +91,16 @@ class ConfigurationStorageImpl(
 
     /** Reads protected-resource metadata for the given URL/host. */
     override suspend fun getProtectedResource(resourceUrl: String): ProtectedResourceMetadata? {
+        Log.i { "[ZETA-SDK] resolve host for: $resourceUrl" }
         val resFqdn = hostOf(resourceUrl)
+
+        Log.i { "[ZETA-SDK] get key for: $resFqdn" }
         val key = prKey(resFqdn)
+
+        Log.i { "[ZETA-SDK] get key from storage: $key" }
         val raw = storage.get(key) ?: return null
+
+        Log.i { "[ZETA-SDK] decoding ProtectedResource metadata" }
         return runCatching { json.decodeFromString<ProtectedResourceMetadata>(raw) }.getOrNull()
     }
 

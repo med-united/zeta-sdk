@@ -25,8 +25,7 @@
 package de.gematik.zeta.sdk.network.http.client.config.tls
 
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaCertificateValidator.ZetaCertificateAlgorithms.ALLOWED_CURVES_NORMALIZED
-import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaSignatureAlgorithms.MIN_EC_KEY_BITS
-import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaSignatureAlgorithms.MIN_RSA_KEY_BITS
+import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaCertificateValidator.ZetaCertificateAlgorithms.MIN_EC_KEY_BITS
 
 public data class CertificateValidationResult(
     val isValid: Boolean,
@@ -42,15 +41,14 @@ public data class ZetaCertInfo(
     val curveName: String? = null,
     val notBefore: Long,
     val notAfter: Long,
+    val san: List<String> = emptyList(),
 )
 
 public object ZetaCertificateValidator {
     public object ZetaCertificateAlgorithms {
         public val ALLOWED_SIGNATURE_ALGORITHMS: Set<String> = setOf(
             "SHA256WITHECDSA",
-            "SHA256WITHRSA",
-            "RSASSA-PSS",
-            "SHA256WITHRSAANDMGF1",
+            "SHA384WITHECDSA",
         )
         public val FORBIDDEN_SIGNATURE_ALGORITHMS: Set<String> = setOf(
             "SHA1WITHECDSA",
@@ -61,13 +59,12 @@ public object ZetaCertificateValidator {
         internal val ALLOWED_CURVES_NORMALIZED: Set<String> =
             ZetaTlsCurves.ALLOWED.map { it.normalize() }.toSet()
 
-        public const val MIN_RSA_KEY_BITS: Int = 2048
         public const val EC_P256_KEY_SIZE_BITS: Int = 256
         public const val EC_P384_KEY_SIZE_BITS: Int = 384
         public const val MIN_EC_KEY_BITS: Int = EC_P256_KEY_SIZE_BITS
     }
 
-    public fun validate(cert: ZetaCertInfo, nowEpochSeconds: Long): CertificateValidationResult {
+    public fun validate(cert: ZetaCertInfo, nowEpochSeconds: Long, host: String? = null): CertificateValidationResult {
         val errors = mutableListOf<String>()
         val sigAlg = cert.sigAlgName.normalize()
 
@@ -77,21 +74,19 @@ public object ZetaCertificateValidator {
             errors += "Signature algorithm '${cert.sigAlgName}' is not allowed"
         }
 
-        when (cert.keyAlgorithm.uppercase()) {
-            "RSA" -> if (cert.keySize < MIN_RSA_KEY_BITS) {
-                errors += "RSA key too small: ${cert.keySize} (min: $MIN_RSA_KEY_BITS)"
-            }
-
+        when (val keyAlg = cert.keyAlgorithm.uppercase()) {
             "EC" -> {
                 if (cert.keySize < MIN_EC_KEY_BITS) {
                     errors += "EC key too small: ${cert.keySize} (min: $MIN_EC_KEY_BITS)"
                 }
-                cert.curveName?.let { curve ->
-                    if (curve.normalize() !in ALLOWED_CURVES_NORMALIZED) {
-                        errors += "EC curve '$curve' is not allowed"
-                    }
+                val curve = cert.curveName
+                if (curve == null) {
+                    errors += "EC certificate has no named curve"
+                } else if (curve.normalize() !in ALLOWED_CURVES_NORMALIZED) {
+                    errors += "EC curve '$curve' is not allowed"
                 }
             }
+            else -> errors += "Key algorithm '$keyAlg' is not allowed: only EC keys are supported"
         }
 
         if (nowEpochSeconds < cert.notBefore) {
@@ -99,6 +94,13 @@ public object ZetaCertificateValidator {
         }
         if (nowEpochSeconds > cert.notAfter) {
             errors += "Certificate has expired: ${cert.subjectDN}"
+        }
+
+        if (host != null) {
+            val matched = cert.san.any { sanMatchesHost(it, host) }
+            if (!matched) {
+                errors += "Certificate SAN does not match host '$host': ${cert.san}"
+            }
         }
 
         return CertificateValidationResult(errors.isEmpty(), errors, emptyList())

@@ -27,15 +27,9 @@ package de.gematik.zeta.sdk.flow
 import Jwk
 import PublicKeyOut
 import de.gematik.zeta.sdk.clientregistration.ClientRegistrationApiImpl
-import de.gematik.zeta.sdk.configuration.ConfigurationStorage
-import de.gematik.zeta.sdk.configuration.models.ApiVersion
-import de.gematik.zeta.sdk.configuration.models.ApiVersionStatus
-import de.gematik.zeta.sdk.configuration.models.AuthorizationServerMetadata
-import de.gematik.zeta.sdk.configuration.models.ProtectedResourceMetadata
 import de.gematik.zeta.sdk.flow.handler.ClientRegistrationHandler
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
-import de.gematik.zeta.sdk.network.http.client.ZetaHttpResponse
 import de.gematik.zeta.sdk.storage.InMemoryStorage
 import de.gematik.zeta.sdk.tpm.TpmProvider
 import io.ktor.client.HttpClient
@@ -162,7 +156,7 @@ class FlowOrchestratorTest {
         val dummyCtx = getDummyContextWithResource(forwarding)
         val handler = RecordingDoneHandler(FlowNeed.ConfigurationFiles)
 
-        val responseEvaluator = ResponseEvaluator { resp, _ ->
+        val responseEvaluator = ResponseEvaluator { resp, _, _ ->
             if (!handler.called) {
                 FlowDirective.Perform(FlowNeed.ConfigurationFiles)
             } else {
@@ -190,11 +184,10 @@ class FlowOrchestratorTest {
         val engine = MockEngine { respond("", status) }
         val ktor = ZetaHttpClient(HttpClient(engine))
 
-        return object : ForwardingClient {
-            override suspend fun executeOnce(builder: HttpRequestBuilder): ZetaHttpResponse =
-                ktor.request {
-                    takeFrom(builder)
-                }
+        return ForwardingClient { builder ->
+            ktor.request {
+                takeFrom(builder)
+            }
         }
     }
 
@@ -215,44 +208,44 @@ class FlowOrchestratorTest {
             return PublicKeyOut(byteArrayOf(1), Jwk("", "", "", "", "", "", ""))
         }
 
-        override suspend fun generateDpopKey(): PublicKeyOut {
-            TODO("Not yet implemented")
+        override suspend fun generateDpopKey(resource: String): PublicKeyOut {
+            error("not in scope of the test")
         }
 
         override suspend fun signWithClientKey(input: ByteArray): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
-        override suspend fun signWithDpopKey(input: ByteArray): ByteArray {
-            TODO("Not yet implemented")
+        override suspend fun signWithDpopKey(input: ByteArray, resource: String): ByteArray {
+            error("not in scope of the test")
         }
 
         override suspend fun readSmbCertificate(p12File: String, alias: String, password: String): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun readSmbCertificateFromBytes(data: ByteArray, alias: String, password: String): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun signWithSmbKey(input: ByteArray, p12File: String, alias: String, password: String): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun signWithSmbKeyFromBytes(input: ByteArray, keystoreBytes: ByteArray, alias: String, password: String): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun randomUuid(): Uuid {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun getRegistrationNumber(certificate: ByteArray): String {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
-        override fun forget() {
-            TODO("Not yet implemented")
+        override suspend fun forget(resource: String?) {
+            error("not in scope of the test")
         }
     }
 }

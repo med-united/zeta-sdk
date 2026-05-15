@@ -26,7 +26,8 @@ package de.gematik.zeta.sdk.crypto
 
 expect class X509CertValidator() {
     fun checkValidity(certDer: ByteArray)
-    fun getExtendedKeyUsage(certDer: ByteArray): List<String>
+    fun getProfessionOids(certDer: ByteArray): List<String>
     fun getPublicKey(certDer: ByteArray): ByteArray
     fun validateCertChain(chainDer: List<ByteArray>, trustAnchorsDer: List<ByteArray>)
+    fun getSanDnsNames(certDer: ByteArray): List<String>
 }

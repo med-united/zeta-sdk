@@ -133,7 +133,7 @@ class SecureSdkStorageTest {
     }
 
     @Test
-    fun get_returnsEmptyString_missingKeyWithoutSecrets() = runTest {
+    fun get_returnsNullString_missingKeyWithoutSecrets() = runTest {
         // Arrange
         val (sut, _) = buildSut(secrets = null)
 
@@ -141,7 +141,7 @@ class SecureSdkStorageTest {
         val result = sut.get("nonexistent_key")
 
         // Assert
-        assertEquals("", result)
+        assertNull(result)
     }
 
     @Test

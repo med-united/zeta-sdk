@@ -5,6 +5,9 @@
 package io.ktor.client.engine.curl.internal
 
 import io.ktor.client.engine.*
+import io.ktor.client.engine.curl.ktor_install_curve_validator
+import io.ktor.client.engine.curl.ktor_install_info_callback
+import io.ktor.client.engine.curl.ktor_ssl_ctx_callback
 import io.ktor.client.engine.curl.tls.validateTlsSession
 import io.ktor.client.plugins.*
 import io.ktor.utils.io.*
@@ -21,11 +24,37 @@ private class RequestHolder(
     val responseCompletable: CompletableDeferred<CurlSuccess>,
     val requestWrapper: StableRef<CurlRequestBodyData>,
     val responseWrapper: StableRef<CurlResponseBodyData>,
+    val pinnedCurves: Pinned<ByteArray>? = null,
 ) {
     fun dispose() {
         requestWrapper.dispose()
         responseWrapper.dispose()
+        pinnedCurves?.unpin()
     }
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun curlSslCtxCallback(
+    curl: COpaquePointer?,
+    sslCtx: COpaquePointer?,
+    userptr: COpaquePointer?,
+): CURLcode {
+    if (sslCtx == null) {
+        return CURLE_SSL_CONNECT_ERROR
+    }
+    val groups = userptr?.reinterpret<ByteVar>()?.toKString()
+    if (groups.isNullOrEmpty()) {
+        return CURLE_SSL_CONNECT_ERROR
+    }
+    val result = ktor_ssl_ctx_callback(curl, sslCtx, groups)
+    if (result != 0) {
+        return CURLE_SSL_CONNECT_ERROR
+    }
+
+    ktor_install_info_callback(sslCtx.reinterpret())
+    ktor_install_curve_validator(sslCtx.reinterpret(), groups)
+
+    return CURLE_OK
 }
 
 @OptIn(ExperimentalForeignApi::class)
@@ -105,10 +134,12 @@ internal class CurlMultiApiHandler : Closeable {
 
         setupMethod(easyHandle, request.method, request.contentLength)
         val requestWrapper = setupUploadContent(easyHandle, request)
+        val pinnedCurves = request.sslEcCurves?.encodeToByteArray()?.pin()
         val requestHolder = RequestHolder(
             deferred,
             requestWrapper.asStableRef(),
             responseWrapper.asStableRef(),
+            pinnedCurves,
         )
 
         activeHandles[easyHandle] = requestHolder
@@ -149,12 +180,22 @@ internal class CurlMultiApiHandler : Closeable {
                 option(CURLOPT_SSL_VERIFYPEER, 0L)
                 option(CURLOPT_SSL_VERIFYHOST, 0L)
             }
+
+            if (request.sslVerifyStatus) {
+                option(CURLOPT_SSL_VERIFYSTATUS, 1L)
+            }
             request.caPath?.let { option(CURLOPT_CAPATH, it) }
             request.caInfo?.let { option(CURLOPT_CAINFO, it) }
 
             request.sslCipherList?.let { list -> option(CURLOPT_SSL_CIPHER_LIST, list) }
             request.tls13Ciphers?.let { option(CURLOPT_TLS13_CIPHERS, it) }
             request.sslEcCurves?.let { option(CURLOPT_SSL_EC_CURVES, it) }
+
+            pinnedCurves?.let {
+                option(CURLOPT_SSL_CTX_FUNCTION, staticCFunction(::curlSslCtxCallback))
+                option(CURLOPT_SSL_CTX_DATA, it.addressOf(0))
+            }
+
             request.sslSignatureAlgorithms?.let { option(CURLOPT_SSL_SIGNATURE_ALGORITHMS, it) }
             option(CURLOPT_SSLVERSION, request.sslVersion.curlValue)
         }
@@ -310,7 +351,7 @@ internal class CurlMultiApiHandler : Closeable {
             val responseBuilder = responseDataRef.value!!.fromCPointer<CurlResponseBuilder>()
             try {
                 collectFailedResponse(message, responseBuilder.request, result, httpStatusCode.value)
-                    ?: collectSuccessResponse(easyHandle)!!
+                    ?: collectSuccessResponse(easyHandle, validateTls = false)!!
             } finally {
                 responseBuilder.responseBody.close()
                 responseBuilder.headersBytes.close()
@@ -357,7 +398,7 @@ internal class CurlMultiApiHandler : Closeable {
         )
     }
 
-    private fun collectSuccessResponse(easyHandle: EasyHandle): CurlSuccess? = memScoped {
+    private fun collectSuccessResponse(easyHandle: EasyHandle, validateTls: Boolean = true): CurlSuccess? = memScoped {
         val responseDataRef = alloc<COpaquePointerVar>()
         val httpProtocolVersion = alloc<LongVar>()
         val httpStatusCode = alloc<LongVar>()
@@ -374,7 +415,7 @@ internal class CurlMultiApiHandler : Closeable {
         }
 
         val responseBuilder = responseDataRef.value!!.fromCPointer<CurlResponseBuilder>()
-        if (responseBuilder.request.sslVerify) {
+        if (responseBuilder.request.sslVerify && validateTls) {
             validateTlsSession(easyHandle, responseBuilder.request.tlsValidationConfig)
         }
 

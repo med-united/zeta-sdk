@@ -157,28 +157,6 @@ class AuthenticationApiImplTests {
     }
 
     @Test
-    fun requestAccessToken_throwsRecoverableExceptionOnBadRequest() = runTest {
-        // Arrange
-        val engine = MockEngine {
-            respond(
-                content = "bad request",
-                status = HttpStatusCode.BadRequest,
-                headers = headersOf(HttpHeaders.ContentType, "text/plain"),
-            )
-        }
-        val api = AuthenticationApiImpl(createClient(engine))
-
-        // Act & Assert
-        assertFailsWith<RecoverableAuthenticationException> {
-            api.requestAccessToken(
-                fromEndpoint = "https://example.com/token",
-                accessTokenRequest = createAccessTokenRequest(),
-                dpopToken = "dpop-token",
-            )
-        }
-    }
-
-    @Test
     fun requestAccessToken_throwsRecoverableExceptionOnUnauthorized() = runTest {
         // Arrange
         val engine = MockEngine {

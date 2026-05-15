@@ -91,11 +91,11 @@ stages:
         RELEASE_VERSION: $CI_COMMIT_TAG
     - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop" && $RELEASE_VERSION_WEB == "latest"
       variables:
-        SONAR_QUALITY_GATE_ENABLED: "false"
+        SONAR_QUALITY_GATE_ENABLED: "true"
         RELEASE_VERSION: "develop-mr-$CI_COMMIT_SHORT_SHA"
     - if: $CI_COMMIT_BRANCH == "develop" && $RELEASE_VERSION_WEB == "latest"
       variables:
-        SONAR_QUALITY_GATE_ENABLED: "false"
+        SONAR_QUALITY_GATE_ENABLED: "true"
         RELEASE_VERSION: "develop"
     - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging" && $RELEASE_VERSION_WEB == "latest"
       variables:
@@ -251,10 +251,13 @@ sbom:
   <<: *gradle_template
   stage: build
   script:
+    - ./gradlew cyclonedxDirectBom --info
     - ./gradlew cyclonedxBom
   artifacts:
     when: always
     paths:
+      - "**/build/reports/cyclonedx-direct/bom.json"
+      - "**/build/reports/cyclonedx-direct/bom.xml"
       - "**/build/reports/cyclonedx/bom.json"
       - "**/build/reports/cyclonedx/bom.xml"
 
@@ -339,7 +342,7 @@ publish_artifacts:
 .check_matrix: &check_matrix
   parallel:
     matrix:
-      - PLATFORM: ["testdriver"]
+      - PLATFORM: ["testdriver", "nativedriver"]
 
 build-image:
   <<: *image_template
@@ -348,7 +351,7 @@ build-image:
   script:
     - printf "%s" "$CI_DEPENDENCY_PROXY_PASSWORD" | docker login "$CI_DEPENDENCY_PROXY_SERVER" -u "$CI_DEPENDENCY_PROXY_USER" --password-stdin
     - printf "%s" "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
-    - docker build -t "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/"$PLATFORM"-image:$RELEASE_VERSION -f Dockerfile."$PLATFORM" .
+    - docker build --build-arg DOCKER_HUB="$CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX" -t "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/"$PLATFORM"-image:$RELEASE_VERSION -f Dockerfile."$PLATFORM" .
     - docker push "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/"$PLATFORM"-image:$RELEASE_VERSION
     - docker tag "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/"$PLATFORM"-image:$RELEASE_VERSION "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/"$PLATFORM"-image:$RELEASE_VERSION-$CI_COMMIT_SHORT_SHA
     - docker push "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/"$PLATFORM"-image:$RELEASE_VERSION-$CI_COMMIT_SHORT_SHA
@@ -376,25 +379,53 @@ build-image-testdriver:
   script:
     - printf "%s" "$CI_DEPENDENCY_PROXY_PASSWORD" | docker login "$CI_DEPENDENCY_PROXY_SERVER" -u "$CI_DEPENDENCY_PROXY_USER" --password-stdin
     - printf "%s" "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
-    - docker build -t "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/testdriver-image:$RELEASE_VERSION -f zeta-testdriver/Dockerfile .
+    - docker build --build-arg DOCKER_HUB="$CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX" -t "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/testdriver-image:$RELEASE_VERSION -f zeta-testdriver/Dockerfile .
     - docker push "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/testdriver-image:$RELEASE_VERSION
     - docker tag "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/testdriver-image:$RELEASE_VERSION "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/testdriver-image:$RELEASE_VERSION-$CI_COMMIT_SHORT_SHA
     - docker push "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/testdriver-image:$RELEASE_VERSION-$CI_COMMIT_SHORT_SHA
+
+build-package-nativetestdriver:
+  <<: *image_template
+  image: $CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/eclipse-temurin:21-jdk
+  stage: image_build
+  script:
+    - apt-get update && apt-get install -y libunistring-dev
+    - ./gradlew :zeta-nativetestdriver:linkReleaseExecutableLinuxX64
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - zeta-nativetestdriver/build/bin/linuxX64/releaseExecutable/native-server.kexe
+
+build-image-nativetestdriver:
+  <<: *image_template
+  stage: image_build
+  needs: [build-package-nativetestdriver]
+  script:
+    - printf "%s" "$CI_DEPENDENCY_PROXY_PASSWORD" | docker login "$CI_DEPENDENCY_PROXY_SERVER" -u "$CI_DEPENDENCY_PROXY_USER" --password-stdin
+    - printf "%s" "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+    - docker build -t "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/nativedriver-image:$RELEASE_VERSION -f zeta-nativetestdriver/Dockerfile .
+    - docker push "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/nativedriver-image:$RELEASE_VERSION
+    - docker tag "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/nativedriver-image:$RELEASE_VERSION "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/nativedriver-image:$RELEASE_VERSION-$CI_COMMIT_SHORT_SHA
+    - docker push "$CI_REGISTRY"/zeta/zeta-client/zeta-sdk/nativedriver-image:$RELEASE_VERSION-$CI_COMMIT_SHORT_SHA
 
 trigger_helm:
   stage: image_build
   needs:
     - job: build-image-testdriver
       optional: true
+    - job: build-image-nativetestdriver
+      optional: true
   rules:
     # deploy to staging
     - if: '$CI_COMMIT_BRANCH == "develop"'
       variables:
         TESTDRIVER_IMAGE_TAG: "develop"
+        NATIVEDRIVER_IMAGE_TAG: "develop"
     - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop" && $RELEASE_VERSION_WEB == "latest"
       when: on_success
       variables:
         TESTDRIVER_IMAGE_TAG: "develop-mr-$CI_COMMIT_SHORT_SHA"
+        NATIVEDRIVER_IMAGE_TAG: "develop-mr-$CI_COMMIT_SHORT_SHA"
     - when: never
   trigger:
     project: zeta/devops/zeta-guard-helm
@@ -421,6 +452,7 @@ container_scan:
   needs:
     - job: build-image
     - job: build-image-testdriver
+    - job: build-image-nativetestdriver
   image:
     name: $CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/aquasec/trivy:0.69.3@sha256:7228e304ae0f610a1fad937baa463598cadac0c2ac4027cc68f3a8b997115689
     entrypoint: [ "" ]
@@ -486,3 +518,14 @@ publish_to_dependencytrack:
       -F "projectVersion=${RELEASE_VERSION}"
       -F "autoCreate=true"
       -F "bom=@build/reports/cyclonedx/bom.json"
+#    - >-
+#      for i in asl flow-controller tpm configuration client-registration crypto common storage zeta-sdk network authentication attestation . attestation-service zeta-client zeta-client-cpp zeta-testdriver zeta-client-java ktor-client-curl; do
+#      curl -X POST ${DEPENDENCYTRACK_URL}
+#      -H "Content-Type: multipart/form-data"
+#      -H "X-API-Key: ${DEPENDENCYTRACK_TOKEN}"
+#      -F "projectName=zeta-sdk-$i"
+#      -F "projectVersion=${RELEASE_VERSION}"
+#      -F "autoCreate=true"
+#      -F "bom=@./$i/build/reports/cyclonedx-direct/bom.json";
+#      done
+
