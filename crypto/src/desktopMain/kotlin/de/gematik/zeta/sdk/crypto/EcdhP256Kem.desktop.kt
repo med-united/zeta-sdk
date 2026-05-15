@@ -37,7 +37,13 @@ import kotlin.io.encoding.Base64
 actual class EcdhP256Kem actual constructor() : Kem {
 
     private val provider = CryptographyProvider.Default
+
+    // CryptographyProvider.get() cannot be replaced with index operator
+    // as the [] operator is not available on this type
     private val ecdh = provider.get(ECDH)
+
+    // CryptographyProvider.get() cannot be replaced with index operator
+    // as the [] operator is not available on this type
     private val ecdsa = provider.get(ECDSA)
 
     actual override fun generateKeys(): KeyPair {

@@ -1,8 +1,7 @@
-<img align="right" width="250" height="47" src="docs/img/Gematik_Logo_Flag.png"/> <br/>
 
-# Release Notes ZETA SDK
+# RELEASE NOTES
 
-## Version: v0.5.1
+## Version: v1.0.1
 
 This version implements the ZETA protocol for the ZETA client SDK.
 
@@ -28,10 +27,32 @@ It provides SDK bindings for kotlin (as original implementation), Java, and C++.
 - demo client in kotlin to manually test against the test Fachdienst (resource server)
 - Java-client example for how to integrate and use the SDK in a Java application
 - C++ client build
+- C# client build
 
 ### Known issues:
 
-#### Functional
+## Changes in 1.0.1 (from 1.0.0)
+
+### New Features
+- Custom SMC-B Connector: inject your own SMC-B connector implementation via `AuthConfig`.
+- Custom Storage: replace the default platform storage with a custom `SdkStorage` implementation
+- Custom Log Provider: redirect SDK log output via `ZetaLogger`, configurable log level (`DEBUG`, `INFO`, `WARN`, `ERROR`, `NONE`), default is `ERROR`
+
+### Bug Fixes
+- Step-up authentication: client registration storage is now cleared during step-up, forcing re-registration with a new `client_id` when a 401 is received
+- EC curve validation: TLS handshake now enforces allowed EC curves at the OpenSSL level
+- Proxy password: not sent as a pointer representation, instead of the actual string value
+
+### Improvements
+- Logging now uses a unified implementation across all platforms. SLF4J dependency removed from JVM. Default output now uses `println`
+- Ktor HTTP client logging now delegates to the SDK log system
+
+## Changes in 1.0.0 (from 0.5.1)
+
+- C# client
+- Bugfixes
+- CVE fixes
+- Code Quality activities
 
 ## Changes from 0.5.0
 
@@ -140,7 +161,3 @@ It provides SDK bindings for kotlin (as original implementation), Java, and C++.
 - minor bug fixes
 - Version updates
 
-## Release 0.1.2
-
-### added:
-- Prototype of the ZETA SDK added

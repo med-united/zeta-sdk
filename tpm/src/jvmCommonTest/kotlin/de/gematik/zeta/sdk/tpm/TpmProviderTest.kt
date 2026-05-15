@@ -27,27 +27,32 @@ package de.gematik.zeta.sdk.tpm
 import de.gematik.zeta.sdk.crypto.EcdhSigner
 import de.gematik.zeta.sdk.storage.InMemoryStorage
 import joseToDerEcdsa
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.junit.Before
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.io.IOException
 import java.security.Security
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import kotlin.io.encoding.Base64
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Instant
 
-@Suppress("FunctionNaming")
+@Suppress("FunctionNaming", "TooManyFunctions")
 class TpmProviderTest {
-
     private val tpmStorage: TpmStorage = TpmStorageImpl(InMemoryStorage())
-
     private val signer = EcdhSigner()
-
     private val tpmProvider = platformDefaultProvider(tpmStorage)
 
     @Before
@@ -55,88 +60,416 @@ class TpmProviderTest {
         Security.addProvider(BouncyCastleProvider())
     }
 
-    @Test
-    fun `given P12 file when read SM-B certificate and encode base64 then should equals expected`() = runTest {
-        // given
-        val p12file = KEYSTORE_P12_FILE
-        val alias = KEYSTORE_ALIAS
-        val password = KEYSTORE_PASS
-
-        // when
-        val cert = tpmProvider.readSmbCertificate(p12file, alias, password)
-        val base64cert = Base64.encode(cert)
-
-        // then
-        assertEquals(CERTIFICATE_DATA, base64cert)
-    }
-
-    @Test
-    fun `given data and P12 file when read SM-B certificate sign and verify then should be valid signature`() = runTest {
-        // given
-        val p12file = KEYSTORE_P12_FILE
-        val alias = KEYSTORE_ALIAS
-        val password = KEYSTORE_PASS
-
-        val data = "some test data"
-
-        // when
-        val cert = tpmProvider.readSmbCertificate(p12file, alias, password)
-        val signature = tpmProvider.signWithSmbKey(data.toByteArray(), p12file, alias, password)
-        val valid = signer.verify(extractPublicKey(cert), data.toByteArray(), joseToDerEcdsa(signature))
-
-        // then
-        assertTrue(valid)
-    }
-
-    @Test
-    fun `given data when generate DPoP key, sign and verify then should be valid signature`() = runTest {
-        // given
-        val data = "some test data"
-
-        // when
-        val key = tpmProvider.generateDpopKey()
-        val signature = tpmProvider.signWithDpopKey(data.toByteArray())
-        val valid = signer.verify(key.encoded, data.toByteArray(), joseToDerEcdsa(signature))
-
-        // then
-        assertTrue(valid)
-    }
-
-    @Test
-    fun `given wrong pass when read SM-B certificate then should throw error`() = runTest {
-        // given
-        val p12file = KEYSTORE_P12_FILE
-        val alias = KEYSTORE_ALIAS
-        val password = "wrong"
-
-        // when + then
-        val error = assertFailsWith<IOException> {
-            tpmProvider.readSmbCertificate(p12file, alias, password)
-        }
-        assertEquals("keystore password was incorrect", error.message)
-    }
-
-    @Test
-    fun `given wrong alias when sign with SM-B key then should throw error`() = runTest {
-        // given
-        val p12file = KEYSTORE_P12_FILE
-        val alias = "wrong"
-        val password = KEYSTORE_PASS
-
-        // when + then
-        val error = assertFailsWith<IllegalArgumentException> {
-            tpmProvider.signWithSmbKey("".toByteArray(), p12file, alias, password)
-        }
-        assertEquals("No key with alias 'wrong'", error.message)
-    }
-
+    private fun createStorage() = TpmStorageImpl(InMemoryStorage())
+    private fun createProvider(storage: TpmStorage = createStorage()) = platformDefaultProvider(storage)
     private fun extractPublicKey(cert: ByteArray): ByteArray {
         val factory = CertificateFactory.getInstance("X.509")
         val certificate = factory.generateCertificate(ByteArrayInputStream(cert)) as X509Certificate
         return certificate.publicKey.encoded
     }
 
+    @Test
+    fun readSmbCertificate_returnsExpectedBase64_validP12File() = runTest {
+        val cert = tpmProvider.readSmbCertificate(KEYSTORE_P12_FILE, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        assertEquals(CERTIFICATE_DATA, Base64.encode(cert))
+    }
+
+    @Test
+    fun signWithSmbKey_producesValidSignature_validP12File() = runTest {
+        val data = "some test data"
+        val cert = tpmProvider.readSmbCertificate(KEYSTORE_P12_FILE, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        val signature = tpmProvider.signWithSmbKey(data.toByteArray(), KEYSTORE_P12_FILE, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        assertTrue(signer.verify(extractPublicKey(cert), data.toByteArray(), joseToDerEcdsa(signature)))
+    }
+
+    @Test
+    fun generateDpopKey_andSignWithDpopKey_producesValidSignature() = runTest {
+        val data = "some test data"
+        val key = tpmProvider.generateDpopKey(RESOURCE)
+        val signature = tpmProvider.signWithDpopKey(data.toByteArray(), RESOURCE)
+        assertTrue(signer.verify(key.encoded, data.toByteArray(), joseToDerEcdsa(signature)))
+    }
+
+    @Test
+    fun readSmbCertificate_throwsIOException_wrongPassword() = runTest {
+        val error = assertFailsWith<IOException> {
+            tpmProvider.readSmbCertificate(KEYSTORE_P12_FILE, KEYSTORE_ALIAS, "wrong")
+        }
+        assertEquals("keystore password was incorrect", error.message)
+    }
+
+    @Test
+    fun signWithSmbKey_throwsIllegalArgumentException_wrongAlias() = runTest {
+        val error = assertFailsWith<IllegalArgumentException> {
+            tpmProvider.signWithSmbKey("".toByteArray(), KEYSTORE_P12_FILE, "wrong", KEYSTORE_PASS)
+        }
+        assertEquals("No key with alias 'wrong'", error.message)
+    }
+
+    @Test
+    fun saveClientKeys_storesTimestamp_onFirstSave() = runTest {
+        tpmStorage.saveClientKeys("some-public-key", "some-private-key")
+        val timestamp = tpmStorage.getClientKeyCreatedAt()
+        assertNotNull(timestamp)
+        assertTrue(Instant.parse(timestamp).epochSeconds > 0)
+    }
+
+    @Test
+    fun saveClientKeys_updatesTimestamp_onSecondSave() = runTest {
+        tpmStorage.saveClientKeys("pub1", "priv1")
+        val firstTimestamp = tpmStorage.getClientKeyCreatedAt()
+        delay(100)
+        tpmStorage.saveClientKeys("pub2", "priv2")
+        val secondTimestamp = tpmStorage.getClientKeyCreatedAt()
+        assertNotNull(firstTimestamp)
+        assertNotNull(secondTimestamp)
+        assertTrue(Instant.parse(secondTimestamp) > Instant.parse(firstTimestamp))
+    }
+
+    @Test
+    fun getClientKeyCreatedAt_returnsNull_whenNoKeysSaved() = runTest {
+        assertNull(tpmStorage.getClientKeyCreatedAt())
+    }
+
+    @Test
+    fun clear_removesAllClientKeyData_afterSave() = runTest {
+        tpmStorage.saveClientKeys("pub", "priv")
+        assertNotNull(tpmStorage.getClientKeyCreatedAt())
+        tpmStorage.clear()
+        assertNull(tpmStorage.getClientKeyCreatedAt())
+        assertNull(tpmStorage.getClientPublicKey())
+        assertNull(tpmStorage.getClientPrivateKey())
+    }
+
+    @Test
+    fun saveClientKeys_storesCorrectValues_publicAndPrivate() = runTest {
+        tpmStorage.saveClientKeys("my-public-key", "my-private-key")
+        assertEquals("my-public-key", tpmStorage.getClientPublicKey())
+        assertEquals("my-private-key", tpmStorage.getClientPrivateKey())
+    }
+
+    @Test
+    fun saveDpopKeys_isIndependent_fromClientKeys() = runTest {
+        tpmStorage.saveClientKeys("client-pub", "client-priv")
+        tpmStorage.saveDpopKeys(RESOURCE, "dpop-pub", "dpop-priv")
+        assertEquals("client-pub", tpmStorage.getClientPublicKey())
+        assertEquals("client-priv", tpmStorage.getClientPrivateKey())
+        assertEquals("dpop-pub", tpmStorage.getDpopPublicKey(RESOURCE))
+        assertEquals("dpop-priv", tpmStorage.getDpopPrivateKey(RESOURCE))
+    }
+
+    @Test
+    fun saveDpopKeys_areIsolated_perResource() = runTest {
+        tpmStorage.saveDpopKeys(RESOURCE, "pub-a", "priv-a")
+        tpmStorage.saveDpopKeys(RESOURCE_2, "pub-b", "priv-b")
+        assertEquals("pub-a", tpmStorage.getDpopPublicKey(RESOURCE))
+        assertEquals("pub-b", tpmStorage.getDpopPublicKey(RESOURCE_2))
+    }
+
+    @Test
+    fun deleteDpopKeys_removesOnlyTargetResource() = runTest {
+        tpmStorage.saveDpopKeys(RESOURCE, "pub-a", "priv-a")
+        tpmStorage.saveDpopKeys(RESOURCE_2, "pub-b", "priv-b")
+        tpmStorage.deleteDpopKeys(RESOURCE)
+        assertNull(tpmStorage.getDpopPublicKey(RESOURCE))
+        assertNull(tpmStorage.getDpopPrivateKey(RESOURCE))
+        assertEquals("pub-b", tpmStorage.getDpopPublicKey(RESOURCE_2))
+    }
+
+    @Test
+    fun deleteAllDpopKeys_removesAllResources() = runTest {
+        tpmStorage.saveDpopKeys(RESOURCE, "pub-a", "priv-a")
+        tpmStorage.saveDpopKeys(RESOURCE_2, "pub-b", "priv-b")
+        tpmStorage.deleteAllDpopKeys()
+        assertNull(tpmStorage.getDpopPublicKey(RESOURCE))
+        assertNull(tpmStorage.getDpopPublicKey(RESOURCE_2))
+    }
+
+    @Test
+    fun getOrGenerateClientInstancePublicKey_returnsNonEmptyPublicKey_onFirstCall() = runTest {
+        val key = createProvider().getOrGenerateClientInstancePublicKey()
+        assertTrue(key.encoded.isNotEmpty())
+    }
+
+    @Test
+    fun getOrGenerateClientInstancePublicKey_returnsSameKey_onSubsequentCalls() = runTest {
+        val provider = createProvider()
+        val key1 = provider.getOrGenerateClientInstancePublicKey()
+        val key2 = provider.getOrGenerateClientInstancePublicKey()
+        assertContentEquals(key1.encoded, key2.encoded)
+        assertEquals(key1.jwk.kid, key2.jwk.kid)
+    }
+
+    @Test
+    fun getOrGenerateClientInstancePublicKey_savesKeysToStorage_onFirstCall() = runTest {
+        val storage = createStorage()
+        createProvider(storage).getOrGenerateClientInstancePublicKey()
+        assertNotNull(storage.getClientPublicKey())
+        assertNotNull(storage.getClientPrivateKey())
+    }
+
+    @Test
+    fun getOrGenerateClientInstancePublicKey_loadsExistingKey_fromStorage() = runTest {
+        val storage = createStorage()
+        val key1 = createProvider(storage).getOrGenerateClientInstancePublicKey()
+        val key2 = createProvider(storage).getOrGenerateClientInstancePublicKey()
+        assertContentEquals(key1.encoded, key2.encoded)
+    }
+
+    @Test
+    fun getOrGenerateClientInstancePublicKey_returnsEcJwk_withCorrectFields() = runTest {
+        val key = createProvider().getOrGenerateClientInstancePublicKey()
+        assertEquals("EC", key.jwk.kty)
+        assertEquals("ES256", key.jwk.alg)
+        assertEquals("P-256", key.jwk.crv)
+        assertEquals("sig", key.jwk.use)
+        assertTrue(key.jwk.kid.isNotEmpty())
+    }
+
+    @Test
+    fun signWithClientKey_throwsIllegalStateException_whenKeyNotInitialized() = runTest {
+        assertFailsWith<IllegalStateException> {
+            createProvider().signWithClientKey("data".encodeToByteArray())
+        }
+    }
+
+    @Test
+    fun signWithClientKey_producesValidSignature_afterKeyInitialized() = runTest {
+        val provider = createProvider()
+        val publicKey = provider.getOrGenerateClientInstancePublicKey()
+        val data = "sign me".encodeToByteArray()
+        val signature = provider.signWithClientKey(data)
+        assertTrue(signer.verify(publicKey.encoded, data, joseToDerEcdsa(signature)))
+    }
+
+    @Test
+    fun signWithClientKey_producesDifferentSignature_forDifferentInput() = runTest {
+        val provider = createProvider()
+        provider.getOrGenerateClientInstancePublicKey()
+        val sig1 = provider.signWithClientKey("input-a".encodeToByteArray())
+        val sig2 = provider.signWithClientKey("input-b".encodeToByteArray())
+        assertFalse(sig1.contentEquals(sig2))
+    }
+
+    @Test
+    fun signWithClientKey_failsVerification_withWrongPublicKey() = runTest {
+        val provider = createProvider()
+        provider.getOrGenerateClientInstancePublicKey()
+        val wrongKey = createProvider().getOrGenerateClientInstancePublicKey()
+        val data = "data".encodeToByteArray()
+        val signature = provider.signWithClientKey(data)
+        assertFalse(signer.verify(wrongKey.encoded, data, joseToDerEcdsa(signature)))
+    }
+
+    @Test
+    fun generateDpopKey_returnsSameKey_onSubsequentCalls() = runTest {
+        val provider = createProvider()
+        val key1 = provider.generateDpopKey(RESOURCE)
+        val key2 = provider.generateDpopKey(RESOURCE)
+        assertContentEquals(key1.encoded, key2.encoded)
+    }
+
+    @Test
+    fun generateDpopKey_returnsDifferentKeys_forDifferentResources() = runTest {
+        val provider = createProvider()
+        val key1 = provider.generateDpopKey(RESOURCE)
+        val key2 = provider.generateDpopKey(RESOURCE_2)
+        assertFalse(key1.encoded.contentEquals(key2.encoded))
+    }
+
+    @Test
+    fun generateDpopKey_savesKeyToStorage_onFirstCall() = runTest {
+        val storage = createStorage()
+        createProvider(storage).generateDpopKey(RESOURCE)
+        assertNotNull(storage.getDpopPublicKey(RESOURCE))
+        assertNotNull(storage.getDpopPrivateKey(RESOURCE))
+    }
+
+    @Test
+    fun generateDpopKey_loadsExistingKey_fromStorage() = runTest {
+        val storage = createStorage()
+        val key1 = createProvider(storage).generateDpopKey(RESOURCE)
+        val key2 = createProvider(storage).generateDpopKey(RESOURCE)
+        assertContentEquals(key1.encoded, key2.encoded)
+    }
+
+    @Test
+    fun generateDpopKey_isDifferentFrom_clientKey() = runTest {
+        val provider = createProvider()
+        val clientKey = provider.getOrGenerateClientInstancePublicKey()
+        val dpopKey = provider.generateDpopKey(RESOURCE)
+        assertFalse(clientKey.encoded.contentEquals(dpopKey.encoded))
+    }
+
+    @Test
+    fun signWithDpopKey_throwsIllegalStateException_whenKeyNotInitialized() = runTest {
+        assertFailsWith<IllegalStateException> {
+            createProvider().signWithDpopKey("data".encodeToByteArray(), RESOURCE)
+        }
+    }
+
+    @Test
+    fun signWithDpopKey_producesValidSignature_afterKeyGenerated() = runTest {
+        val provider = createProvider()
+        val publicKey = provider.generateDpopKey(RESOURCE)
+        val data = "sign me".encodeToByteArray()
+        val signature = provider.signWithDpopKey(data, RESOURCE)
+        assertTrue(signer.verify(publicKey.encoded, data, joseToDerEcdsa(signature)))
+    }
+
+    @Test
+    fun signWithDpopKey_throwsIllegalStateException_forUnknownResource() = runTest {
+        val provider = createProvider()
+        provider.generateDpopKey(RESOURCE)
+        assertFailsWith<IllegalStateException> {
+            provider.signWithDpopKey("data".encodeToByteArray(), RESOURCE_2)
+        }
+    }
+
+    @Test
+    fun forget_causesSignWithClientKey_toThrow() = runTest {
+        val provider = createProvider()
+        provider.getOrGenerateClientInstancePublicKey()
+        provider.forget()
+        assertFailsWith<IllegalStateException> {
+            provider.signWithClientKey("data".encodeToByteArray())
+        }
+    }
+
+    @Test
+    fun forget_withResource_causesSignWithDpopKey_toThrow() = runTest {
+        val provider = createProvider()
+        provider.generateDpopKey(RESOURCE)
+        provider.forget(RESOURCE)
+        assertFailsWith<IllegalStateException> {
+            provider.signWithDpopKey("data".encodeToByteArray(), RESOURCE)
+        }
+    }
+
+    @Test
+    fun forget_withResource_doesNotAffect_otherResources() = runTest {
+        val provider = createProvider()
+        val key2 = provider.generateDpopKey(RESOURCE_2)
+        provider.generateDpopKey(RESOURCE)
+        provider.forget(RESOURCE)
+        val data = "sign me".encodeToByteArray()
+        val signature = provider.signWithDpopKey(data, RESOURCE_2)
+        assertTrue(signer.verify(key2.encoded, data, joseToDerEcdsa(signature)))
+    }
+
+    @Test
+    fun forget_allowsClientKeyRegeneration_fromStorage() = runTest {
+        val storage = createStorage()
+        val provider = createProvider(storage)
+        val key1 = provider.getOrGenerateClientInstancePublicKey()
+        provider.forget()
+        val key2 = provider.getOrGenerateClientInstancePublicKey()
+        assertContentEquals(key1.encoded, key2.encoded)
+    }
+
+    @Test
+    fun forget_withResource_generatesDifferentDpopKey_onNextCall() = runTest {
+        val provider = createProvider()
+        val key1 = provider.generateDpopKey(RESOURCE)
+        provider.forget(RESOURCE)
+        val key2 = provider.generateDpopKey(RESOURCE)
+        assertFalse(key1.encoded.contentEquals(key2.encoded))
+    }
+
+    @Test
+    fun forget_withNull_clearsAllDpopKeys() = runTest {
+        val provider = createProvider()
+        provider.generateDpopKey(RESOURCE)
+        provider.generateDpopKey(RESOURCE_2)
+        provider.forget()
+        assertFailsWith<IllegalStateException> {
+            provider.signWithDpopKey("data".encodeToByteArray(), RESOURCE)
+        }
+        assertFailsWith<IllegalStateException> {
+            provider.signWithDpopKey("data".encodeToByteArray(), RESOURCE_2)
+        }
+    }
+
+    @Test
+    fun isHardwareBacked_returnsFalse_forSoftwareProvider() {
+        assertFalse(createProvider().isHardwareBacked)
+    }
+
+    @Test
+    fun randomUuid_returnsNonNullValue_whenCalled() = runTest {
+        assertNotNull(createProvider().randomUuid())
+    }
+
+    @Test
+    fun randomUuid_returnsDifferentValues_onSubsequentCalls() = runTest {
+        val provider = createProvider()
+        val uuid1 = provider.randomUuid()
+        val uuid2 = provider.randomUuid()
+        assertNotEquals(uuid1, uuid2)
+    }
+
+    @Test
+    fun readSmbCertificate_throwsIllegalStateException_whenFileIsEmpty() = runTest {
+        assertFailsWith<IllegalStateException> {
+            createProvider().readSmbCertificate("", "alias", "pass")
+        }
+    }
+
+    @Test
+    fun readSmbCertificate_returnsNonEmptyBytes_validP12File() = runTest {
+        val cert = createProvider().readSmbCertificate(KEYSTORE_P12_FILE, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        assertTrue(cert.isNotEmpty())
+    }
+
+    @Test
+    fun readSmbCertificateFromBytes_throwsIllegalStateException_whenDataIsEmpty() = runTest {
+        assertFailsWith<IllegalStateException> {
+            createProvider().readSmbCertificateFromBytes(byteArrayOf(), "alias", "pass")
+        }
+    }
+
+    @Test
+    fun readSmbCertificateFromBytes_returnsSameCert_asReadSmbCertificate() = runTest {
+        val provider = createProvider()
+        val keystoreBytes = File(KEYSTORE_P12_FILE).readBytes()
+        val certFromFile = provider.readSmbCertificate(KEYSTORE_P12_FILE, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        val certFromBytes = provider.readSmbCertificateFromBytes(keystoreBytes, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        assertContentEquals(certFromFile, certFromBytes)
+    }
+
+    @Test
+    fun readSmbCertificateFromBytes_throwsIOException_wrongPassword() = runTest {
+        val keystoreBytes = File(KEYSTORE_P12_FILE).readBytes()
+        assertFailsWith<IOException> {
+            createProvider().readSmbCertificateFromBytes(keystoreBytes, KEYSTORE_ALIAS, "wrong")
+        }
+    }
+
+    @Test
+    fun signWithSmbKeyFromBytes_producesValidSignature_validKeystore() = runTest {
+        val provider = createProvider()
+        val keystoreBytes = File(KEYSTORE_P12_FILE).readBytes()
+        val cert = provider.readSmbCertificateFromBytes(keystoreBytes, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        val data = "sign me".encodeToByteArray()
+        val signature = provider.signWithSmbKeyFromBytes(data, keystoreBytes, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        assertTrue(signer.verify(extractPublicKey(cert), data, joseToDerEcdsa(signature)))
+    }
+
+    @Test
+    fun signWithSmbKeyFromBytes_matchesSignWithSmbKey_forSameInput() = runTest {
+        val provider = createProvider()
+        val keystoreBytes = File(KEYSTORE_P12_FILE).readBytes()
+        val cert = provider.readSmbCertificate(KEYSTORE_P12_FILE, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        val data = "same data".encodeToByteArray()
+        val sigFromFile = provider.signWithSmbKey(data, KEYSTORE_P12_FILE, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        val sigFromBytes = provider.signWithSmbKeyFromBytes(data, keystoreBytes, KEYSTORE_ALIAS, KEYSTORE_PASS)
+        assertTrue(signer.verify(extractPublicKey(cert), data, joseToDerEcdsa(sigFromFile)))
+        assertTrue(signer.verify(extractPublicKey(cert), data, joseToDerEcdsa(sigFromBytes)))
+    }
+
     companion object {
+        private const val RESOURCE = "https://resource.example.com/api"
+        private const val RESOURCE_2 = "https://other.example.com/api"
         private const val KEYSTORE_P12_FILE = "../test-keystore/test.p12"
         private const val KEYSTORE_ALIAS = "test"
         private const val KEYSTORE_PASS = "pass"

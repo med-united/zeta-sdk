@@ -75,7 +75,7 @@ import kotlin.io.encoding.Base64
  *  - JSON (kotlinx.serialization) via [ContentNegotiation].
  *
  * If an engine factory is injected in [ClientConfig.engineFactory], it is used; otherwise, a
- * platform-appropriate engine is created by [de.gematik.zeta.sdk.network.http.client.buildHttpClient].
+ * platform-appropriate engine is created by [buildHttpClient].
  *
  * @param configure Lambda to mutate a fresh [ClientConfig].
  * @param addExtras Lambda to add extra custom configuration.
@@ -171,7 +171,7 @@ public fun buildHttpClient(cfg: ClientConfig, commonSetup: HttpClientConfig<*>.(
         cfg.network.proxyConfig?.let { proxyConfig ->
             if (proxyConfig.type == ProxyType.HTTP && proxyConfig.username != null && proxyConfig.password != null) {
                 defaultRequest {
-                    val credentials = "${proxyConfig.username}:${proxyConfig.password}"
+                    val credentials = "${proxyConfig.username}:${proxyConfig.password.concatToString()}"
                     val encoded = Base64.encode(credentials.encodeToByteArray())
                     header(HttpHeaders.ProxyAuthorization, "Basic $encoded")
                 }
@@ -191,171 +191,71 @@ public fun hostOf(value: String): String {
 
 public class ZetaHttpClient public constructor(
     public val delegate: HttpClient,
-) : Closeable {
-
-    override fun close() {
-        delegate.close()
-    }
-
+) : Closeable by delegate {
     public inline fun <R> useRaw(block: HttpClient.() -> R): R = delegate.block()
+    public suspend fun execute(block: suspend HttpClient.() -> HttpResponse): ZetaHttpResponse =
+        toZetaResponse(delegate.block())
 
-    public suspend inline fun get(
-        urlString: String,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.get(urlString, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun get(urlString: String, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { get(urlString, block) }
 
-    public suspend inline fun get(
-        url: Url,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.get(url, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun get(url: Url, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { get(url, block) }
 
-    public suspend inline fun post(
-        urlString: String,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.post(urlString, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun post(urlString: String, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { post(urlString, block) }
 
-    public suspend inline fun post(
-        url: Url,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.post(url, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun post(url: Url, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { post(url, block) }
 
-    public suspend inline fun put(
-        urlString: String,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.put(urlString, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun put(urlString: String, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { put(urlString, block) }
 
-    public suspend inline fun put(
-        url: Url,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.put(url, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun put(url: Url, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { put(url, block) }
 
-    public suspend inline fun delete(
-        urlString: String,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.delete(urlString, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun delete(urlString: String, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { delete(urlString, block) }
 
-    public suspend inline fun <reified T> delete(
-        url: Url,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.delete(url, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun delete(url: Url, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { delete(url, block) }
 
-    public suspend inline fun patch(
-        urlString: String,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.patch(urlString, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun patch(urlString: String, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { patch(urlString, block) }
 
-    public suspend inline fun patch(
-        url: Url,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.patch(url, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun patch(url: Url, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { patch(url, block) }
 
-    public suspend inline fun options(
-        url: Url,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.options(url, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun options(urlString: String, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { options(urlString, block) }
 
-    public suspend inline fun options(
-        url: String,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.options(url, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun options(url: Url, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { options(url, block) }
 
-    public suspend inline fun head(
-        url: Url,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.head(url, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun head(urlString: String, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { head(urlString, block) }
 
-    public suspend inline fun head(
-        url: String,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.head(url, block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun head(url: Url, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { head(url, block) }
 
-    public suspend inline fun request(
-        noinline block: HttpRequestBuilder.() -> Unit,
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.request(block)
-        return response.toZetaResponse()
-    }
+    public suspend inline fun request(noinline block: HttpRequestBuilder.() -> Unit): ZetaHttpResponse =
+        execute { request(block) }
 
-    public suspend inline fun request(
-        urlString: String,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.request {
-            url(urlString)
-            block()
-        }
-        return response.toZetaResponse()
-    }
+    public suspend inline fun request(urlString: String, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { request { url(urlString); block() } }
 
-    public suspend inline fun request(
-        url: Url,
-        noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.request {
-            url(url)
-            block()
-        }
-        return response.toZetaResponse()
-    }
+    public suspend inline fun request(url: Url, noinline block: HttpRequestBuilder.() -> Unit = {}): ZetaHttpResponse =
+        execute { request { url(url); block() } }
 
     public suspend inline fun submitForm(
         urlString: String,
         formParameters: Parameters,
         encodeInQuery: Boolean = false,
         noinline block: HttpRequestBuilder.() -> Unit = {},
-    ): ZetaHttpResponse {
-        val response: HttpResponse = delegate.submitForm(
-            url = urlString,
-            formParameters = formParameters,
-            encodeInQuery = encodeInQuery,
-            block = block,
-        )
-        return response.toZetaResponse()
-    }
+    ): ZetaHttpResponse = execute { submitForm(urlString, formParameters, encodeInQuery, block) }
 
-    public suspend fun webSocket(request: HttpRequestBuilder.() -> Unit, block: suspend DefaultClientWebSocketSession.() -> Unit) {
-        return delegate.webSocket(request, block)
-    }
+    public suspend fun webSocket(
+        request: HttpRequestBuilder.() -> Unit,
+        block: suspend DefaultClientWebSocketSession.() -> Unit,
+    ): Unit = delegate.webSocket(request, block)
 }

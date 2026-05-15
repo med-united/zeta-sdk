@@ -26,8 +26,6 @@ package de.gematik.zeta.sdk.network.http.client.config.tls
 public object ZetaCipherSuites {
     public const val ECDHE_ECDSA_AES128_GCM_SHA256: String = "ECDHE-ECDSA-AES128-GCM-SHA256"
     public const val ECDHE_ECDSA_AES256_GCM_SHA384: String = "ECDHE-ECDSA-AES256-GCM-SHA384"
-    public const val ECDHE_RSA_AES128_GCM_SHA256: String = "ECDHE-RSA-AES128-GCM-SHA256"
-    public const val ECDHE_RSA_AES256_GCM_SHA384: String = "ECDHE-RSA-AES256-GCM-SHA384"
 
     public const val AES_128_GCM_SHA256: String = "TLS_AES_128_GCM_SHA256"
     public const val AES_256_GCM_SHA384: String = "TLS_AES_256_GCM_SHA384"
@@ -35,8 +33,6 @@ public object ZetaCipherSuites {
     public val REQUIRED_TLS_1_2: List<String> = listOf(
         ECDHE_ECDSA_AES128_GCM_SHA256,
         ECDHE_ECDSA_AES256_GCM_SHA384,
-        ECDHE_RSA_AES128_GCM_SHA256,
-        ECDHE_RSA_AES256_GCM_SHA384,
     )
 
     public val TLS_1_3_SUITES: List<String> = listOf(
@@ -49,8 +45,6 @@ public object ZetaCipherSuites {
     internal val OPENSSL_TO_IANA: Map<String, String> = mapOf(
         ECDHE_ECDSA_AES128_GCM_SHA256 to "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
         ECDHE_ECDSA_AES256_GCM_SHA384 to "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-        ECDHE_RSA_AES128_GCM_SHA256 to "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-        ECDHE_RSA_AES256_GCM_SHA384 to "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
         AES_128_GCM_SHA256 to "TLS_AES_128_GCM_SHA256",
         AES_256_GCM_SHA384 to "TLS_AES_256_GCM_SHA384",
     )

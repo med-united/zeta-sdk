@@ -45,5 +45,3 @@ expect class ProcessMonitor(allowedExecutables: List<String>) {
 
     fun isProcessAllowed(origin: RequestConnectionPoint): Boolean
 }
-
-expect fun getEnv(variable: String): String?

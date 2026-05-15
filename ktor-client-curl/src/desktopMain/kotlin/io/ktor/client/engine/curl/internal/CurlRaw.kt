@@ -46,6 +46,7 @@ internal suspend fun HttpRequestData.toCurlRequest(config: CurlClientEngineConfi
     sslEcCurves = config.sslEcCurves,
     sslSignatureAlgorithms = config.sslSignatureAlgorithms,
     tlsValidationConfig = config.tlsValidationConfig,
+    sslVerifyStatus = config.sslVerifyStatus,
 )
 
 internal class CurlRequestData @OptIn(ExperimentalForeignApi::class) constructor(
@@ -69,6 +70,7 @@ internal class CurlRequestData @OptIn(ExperimentalForeignApi::class) constructor
     val sslEcCurves: String?,
     val sslSignatureAlgorithms: String?,
     val tlsValidationConfig: TlsValidationConfig?,
+    val sslVerifyStatus: Boolean,
 ) {
     override fun toString(): String =
         "CurlRequestData(url='$url', method='$method', content: $contentLength bytes)"

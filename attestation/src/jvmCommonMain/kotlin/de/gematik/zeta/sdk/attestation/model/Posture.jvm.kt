@@ -39,12 +39,31 @@ actual suspend fun buildPosture(
     publicKeyB64: String,
 ): JsonElement {
     Log.d { "Building posture. Getting platform information" }
-    val platformInfo = getPlatformInfo()
+
+    return buildPostureInternal(
+        platform = getPlatform(),
+        platformInfo = getPlatformInfo(),
+        platformProductId = platformProductId,
+        productId = productId,
+        productVersion = productVersion,
+        attChallenge = attChallenge,
+        publicKeyB64 = publicKeyB64,
+    )
+}
+
+internal fun buildPostureInternal(
+    platform: Platform,
+    platformInfo: de.gematik.zeta.platform.PlatformInfo,
+    platformProductId: PlatformProductId,
+    productId: String,
+    productVersion: String,
+    attChallenge: String,
+    publicKeyB64: String,
+): JsonElement {
     val json = Json {
         encodeDefaults = true
     }
 
-    val platform = getPlatform()
     if (platform == Platform.APPLE) {
         return json.encodeToJsonElement(
             ApplePosture.serializer(),
@@ -80,22 +99,26 @@ actual suspend fun buildPosture(
     )
 }
 
-actual suspend fun getPlatform(): Platform {
-    when (val plat = platform()) {
-        is de.gematik.zeta.platform.Platform.Jvm.Macos -> return Platform.APPLE
-        is de.gematik.zeta.platform.Platform.Jvm.Linux -> return Platform.LINUX
-        is de.gematik.zeta.platform.Platform.Jvm.Windows -> return Platform.WINDOWS
-        is de.gematik.zeta.platform.Platform.Android -> return Platform.ANDROID
+internal fun mapPlatform(plat: de.gematik.zeta.platform.Platform): Platform {
+    return when (plat) {
+        is de.gematik.zeta.platform.Platform.Jvm.Macos -> Platform.APPLE
+        is de.gematik.zeta.platform.Platform.Jvm.Linux -> Platform.LINUX
+        is de.gematik.zeta.platform.Platform.Jvm.Windows -> Platform.WINDOWS
+        is de.gematik.zeta.platform.Platform.Android -> Platform.ANDROID
         else -> error("Unknown platform: $plat")
     }
 }
 
-actual fun getPostureType(): PostureType {
-    when (val plat = platform()) {
-        is de.gematik.zeta.platform.Platform.Jvm.Macos -> return PostureType.APPLE
-        is de.gematik.zeta.platform.Platform.Jvm.Linux -> return PostureType.SOFTWARE
-        is de.gematik.zeta.platform.Platform.Jvm.Windows -> return PostureType.SOFTWARE
-        is de.gematik.zeta.platform.Platform.Android -> return PostureType.ANDROID
+internal fun mapPostureType(plat: de.gematik.zeta.platform.Platform): PostureType {
+    return when (plat) {
+        is de.gematik.zeta.platform.Platform.Jvm.Macos -> PostureType.APPLE
+        is de.gematik.zeta.platform.Platform.Jvm.Linux -> PostureType.SOFTWARE
+        is de.gematik.zeta.platform.Platform.Jvm.Windows -> PostureType.SOFTWARE
+        is de.gematik.zeta.platform.Platform.Android -> PostureType.ANDROID
         else -> error("Unknown platform: $plat")
     }
 }
+
+actual suspend fun getPlatform(): Platform = mapPlatform(platform())
+
+actual fun getPostureType(): PostureType = mapPostureType(platform())

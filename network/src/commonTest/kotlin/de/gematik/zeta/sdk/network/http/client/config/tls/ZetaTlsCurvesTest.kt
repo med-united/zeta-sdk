@@ -29,13 +29,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class ZetaTlsCurvesTest {
-
-    @Test
-    fun X25519_value_isX25519() {
-        // Arrange & Act & Assert
-        assertEquals("x25519", ZetaTlsCurves.X25519)
-    }
-
     @Test
     fun P256_value_isSecp256r1() {
         // Arrange & Act & Assert
@@ -43,9 +36,27 @@ class ZetaTlsCurvesTest {
     }
 
     @Test
+    fun P256_alias_isPrime256v1() {
+        // Arrange & Act & Assert
+        assertEquals("prime256v1", ZetaTlsCurves.P256_ALIAS)
+    }
+
+    @Test
+    fun P256_iana_isP256() {
+        // Arrange & Act & Assert
+        assertEquals("P-256", ZetaTlsCurves.P256_IANA)
+    }
+
+    @Test
     fun P384_value_isSecp384r1() {
         // Arrange & Act & Assert
         assertEquals("secp384r1", ZetaTlsCurves.P384)
+    }
+
+    @Test
+    fun P384_iana_isP384() {
+        // Arrange & Act & Assert
+        assertEquals("P-384", ZetaTlsCurves.P384_IANA)
     }
 
     @Test
@@ -61,15 +72,16 @@ class ZetaTlsCurvesTest {
     }
 
     @Test
-    fun ALLOWED_containsAllExpectedCurves_sizeIsFive() {
+    fun ALLOWED_containsAllExpectedCurves() {
         // Arrange & Act
         val curves = ZetaTlsCurves.ALLOWED
-
         // Assert
-        assertEquals(5, curves.size)
-        assertTrue(ZetaTlsCurves.X25519 in curves)
+        assertEquals(7, curves.size)
         assertTrue(ZetaTlsCurves.P256 in curves)
+        assertTrue(ZetaTlsCurves.P256_ALIAS in curves)
+        assertTrue(ZetaTlsCurves.P256_IANA in curves)
         assertTrue(ZetaTlsCurves.P384 in curves)
+        assertTrue(ZetaTlsCurves.P384_IANA in curves)
         assertTrue(ZetaTlsCurves.BRAINPOOL_P256R1 in curves)
         assertTrue(ZetaTlsCurves.BRAINPOOL_P384R1 in curves)
     }

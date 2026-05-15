@@ -27,7 +27,7 @@ package de.gematik.zeta.sdk.asl
 import de.gematik.zeta.logging.Log
 import de.gematik.zeta.sdk.network.http.client.InnerHeadersKey
 import de.gematik.zeta.sdk.network.http.client.InnerStatusKey
-import de.gematik.zeta.sdk.network.http.client.isAslEncryptedResponse
+import de.gematik.zeta.sdk.network.http.client.isAslResponse
 import io.ktor.client.plugins.api.ClientPlugin
 import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.statement.HttpResponse
@@ -35,6 +35,7 @@ import io.ktor.client.statement.HttpResponseContainer
 import io.ktor.client.statement.HttpResponsePipeline
 import io.ktor.client.statement.request
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.util.pipeline.PipelinePhase
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readRemaining
@@ -50,6 +51,11 @@ public fun aslDecryptionPlugin(aslApi: AslApi, innerHttpCodec: InnerHttpCodec): 
         client.responsePipeline.intercept(decryptPhase) {
             val (typeInfo, subject) = it
             val response = context.response
+
+            if (response.status != HttpStatusCode.OK) {
+                Log.i { "ASL response is not 200, skipping decryption" }
+                return@intercept
+            }
 
             if (!shouldDecryptResponse(response)) {
                 return@intercept
@@ -88,5 +94,5 @@ public fun aslDecryptionPlugin(aslApi: AslApi, innerHttpCodec: InnerHttpCodec): 
 public fun shouldDecryptResponse(response: HttpResponse): Boolean {
     val path = response.request.url.encodedPath
     val contentType = response.headers[HttpHeaders.ContentType]
-    return isAslEncryptedResponse(path, contentType)
+    return isAslResponse(path, contentType)
 }

@@ -31,6 +31,6 @@ import io.ktor.client.request.HttpRequestBuilder
  * Minimal client used by the flow to execute the current request builder once.
  * The implementation should avoid re-entering the flow plugin to prevent recursion.
  */
-interface ForwardingClient {
+fun interface ForwardingClient {
     suspend fun executeOnce(builder: HttpRequestBuilder): ZetaHttpResponse
 }

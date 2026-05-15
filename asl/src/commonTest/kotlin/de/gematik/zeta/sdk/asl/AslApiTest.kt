@@ -44,9 +44,10 @@ import kotlin.test.assertNull
 
 class AslApiImplTest {
     val fakeTarget = "https://api.example.com/resource/data"
-    val fakeToken = "DPoP token"
+    val fakeToken = "dpop token"
     val fakeResource = "test-resource"
     val fakeSession = "/session/abc123"
+    val requiredOid = "1.2.276.0.76.4.261"
 
     @Test
     fun decrypt_throwsException_sessionIsNull() = runTest {
@@ -59,6 +60,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val encrypted = byteArrayOf(0x01, 0x02)
 
@@ -80,6 +82,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val tooShortPayload = byteArrayOf(0x00)
 
@@ -101,6 +104,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -128,6 +132,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -155,6 +160,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -166,7 +172,7 @@ class AslApiImplTest {
         val result = sut.encrypt(request, true)
 
         // Assert
-        assertEquals("fake-dpop-token", result.headers["DPoP"])
+        assertEquals("fake-dpop-token", result.headers["dpop"])
     }
 
     @Test
@@ -181,6 +187,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -207,6 +214,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -234,6 +242,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = tokenProvider,
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -261,6 +270,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -287,6 +297,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = tokenProvider,
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -313,6 +324,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -340,6 +352,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -366,6 +379,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }
@@ -392,6 +406,7 @@ class AslApiImplTest {
             zetaHttpClient = ZetaHttpClient(HttpClient {}),
             accessTokenProvider = FakeAccessTokenProvider(),
             tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            requiredRoleOid = requiredOid,
         )
         val request = HttpRequestBuilder().apply {
             url { takeFrom(fakeTarget) }

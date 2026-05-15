@@ -26,6 +26,8 @@ package de.gematik.zeta.sdk.flow.handler
 
 import Jwk
 import PublicKeyOut
+import de.gematik.zeta.sdk.authentication.AuthConfig
+import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
 import de.gematik.zeta.sdk.clientregistration.ClientRegistrationApiImpl
 import de.gematik.zeta.sdk.clientregistration.model.ClientRegistrationResponse
 import de.gematik.zeta.sdk.configuration.ConfigurationStorage
@@ -35,10 +37,15 @@ import de.gematik.zeta.sdk.configuration.models.AuthorizationServerMetadata
 import de.gematik.zeta.sdk.configuration.models.ProtectedResourceMetadata
 import de.gematik.zeta.sdk.configuration.models.ZetaAslUse
 import de.gematik.zeta.sdk.flow.CapabilityResult
+import de.gematik.zeta.sdk.flow.FakeApi
+import de.gematik.zeta.sdk.flow.FakeValidator
 import de.gematik.zeta.sdk.flow.FlowContext
 import de.gematik.zeta.sdk.flow.FlowContextImpl
 import de.gematik.zeta.sdk.flow.FlowNeed
 import de.gematik.zeta.sdk.flow.RequestEvaluatorImplTest.FakeForwardingClient
+import de.gematik.zeta.sdk.flow.getDummyAuthServerObject
+import de.gematik.zeta.sdk.flow.getDummyFlowContext
+import de.gematik.zeta.sdk.flow.getDummyProtectedResourceObject
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
 import de.gematik.zeta.sdk.storage.InMemoryStorage
@@ -51,8 +58,10 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.uuid.Uuid
 
@@ -266,58 +275,58 @@ class ClientRegistrationHandlerTest {
             return PublicKeyOut(byteArrayOf(1), Jwk("", "", "", "", "", "", ""))
         }
 
-        override suspend fun generateDpopKey(): PublicKeyOut {
-            TODO("Not yet implemented")
+        override suspend fun generateDpopKey(resource: String): PublicKeyOut {
+            error("not in scope of the test")
         }
 
         override suspend fun signWithClientKey(input: ByteArray): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
-        override suspend fun signWithDpopKey(input: ByteArray): ByteArray {
-            TODO("Not yet implemented")
+        override suspend fun signWithDpopKey(input: ByteArray, resource: String): ByteArray {
+            error("not in scope of the test")
         }
 
         override suspend fun readSmbCertificate(p12File: String, alias: String, password: String): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun readSmbCertificateFromBytes(data: ByteArray, alias: String, password: String): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun signWithSmbKey(input: ByteArray, p12File: String, alias: String, password: String): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun signWithSmbKeyFromBytes(input: ByteArray, keystoreBytes: ByteArray, alias: String, password: String): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun randomUuid(): Uuid {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun getRegistrationNumber(certificate: ByteArray): String {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
-        override fun forget() {
-            TODO("Not yet implemented")
+        override suspend fun forget(resource: String?) {
+            error("not in scope of the test")
         }
     }
 
     private class FakeConfigurationStorage : ConfigurationStorage {
         override suspend fun getProtectedResource(resourceUrl: String): ProtectedResourceMetadata? {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun saveProtectedResource(protectedRes: String): ProtectedResourceMetadata {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun getAuthServers(): List<AuthorizationServerMetadata> {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun getAuthServer(resource: String): AuthorizationServerMetadata {
@@ -350,15 +359,211 @@ class ClientRegistrationHandlerTest {
         }
 
         override suspend fun linkResourceToAuthorizationServer(resource: String, authServerMetadata: AuthorizationServerMetadata) {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun aslUse(resource: String): ZetaAslUse {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun clear() {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
     }
+}
+
+/**
+ * Unit tests for [ConfigurationHandler].
+ */
+class ConfigurationHandlerTest {
+
+    @Test
+    fun canHandle_onlyConfigurationFiles() {
+        // Arrange
+        val h = ConfigurationHandler(FakeApi(), createAuthConfig())
+
+        // Act & Assert
+        assertTrue(h.canHandle(FlowNeed.ConfigurationFiles))
+    }
+
+    @Test
+    fun canHandle_only_for_ConfigurationFiles() {
+        val h = ConfigurationHandler(FakeApi(), createAuthConfig(), FakeValidator())
+        assertTrue(h.canHandle(FlowNeed.ConfigurationFiles))
+    }
+
+    @Test
+    fun handle_returnsDone_whenMetadataAlreadyAvailable() = runTest {
+        // Arrange
+        val resource = "https://api.example.com"
+        val protectedResourceMetadata =
+            getDummyProtectedResourceObject(resource, listOf("https://auth.example.com"))
+        val ctx = getDummyFlowContext()
+        val authServer = getDummyAuthServerObject(resource)
+        ctx.configurationStorage.saveProtectedResource(Json.encodeToString(protectedResourceMetadata))
+        ctx.configurationStorage.linkResourceToAuthorizationServer(resource, authServer)
+        val h = ConfigurationHandler(FakeApi(), createAuthConfig(), FakeValidator())
+
+        // Act
+        val res = h.handle(FlowNeed.ConfigurationFiles, ctx)
+
+        // Assert
+        assertEquals(CapabilityResult.Done, res)
+    }
+
+    @Test
+    fun handle_doesNotFetch_whenCacheForProtectedResourceMetadataIsAvailable() = runTest {
+        // Arrange
+        val resource = "https://api.example.com"
+        val issuer = "https://auth.example.com"
+        val protectedResourceMetadata = getDummyProtectedResourceObject(resource, listOf(issuer))
+        val api = FakeApi(
+            authJson = mapOf(issuer to Json.encodeToString(getDummyAuthServerObject(issuer))),
+        )
+
+        val h = ConfigurationHandler(api, createAuthConfig(), FakeValidator())
+        val ctx = getDummyFlowContext()
+        ctx.configurationStorage.saveProtectedResource(Json.encodeToString(protectedResourceMetadata))
+
+        // Act
+        val result = h.handle(FlowNeed.ConfigurationFiles, ctx)
+
+        // Assert
+        assertEquals(CapabilityResult.Done, result)
+    }
+
+    @Test
+    fun handle_doesNotFetch_whenCacheForAuthorizationMetadataIsAvailable() = runTest {
+        // Arrange
+        val resource = "https://api.example.com"
+        val issuer = "https://auth.example.com"
+        val asMetadata = getDummyAuthServerObject(issuer)
+        val api = FakeApi(
+            resJson =
+            mapOf(resource to Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(issuer)))),
+        )
+
+        val h = ConfigurationHandler(api, createAuthConfig(), FakeValidator())
+        val ctx = getDummyFlowContext()
+        ctx.configurationStorage.linkResourceToAuthorizationServer(resource, asMetadata)
+
+        // Act
+        val result = h.handle(FlowNeed.ConfigurationFiles, ctx)
+
+        // Assert
+        assertEquals(CapabilityResult.Done, result)
+    }
+
+    @Test
+    fun handle_fetchesBothWhenNotCachedAvailable() = runTest {
+        // Arrange
+        val resource = "https://api.example.com"
+        val issuer = "https://auth.example.com"
+
+        val api = FakeApi(
+            resJson =
+            mapOf(
+                resource to
+                    Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(issuer))),
+            ),
+            authJson = mapOf(issuer to Json.encodeToString(getDummyAuthServerObject(issuer))),
+        )
+        val h = ConfigurationHandler(api, createAuthConfig(), FakeValidator())
+        val ctx = getDummyFlowContext()
+
+        // Act
+        val result = h.handle(FlowNeed.ConfigurationFiles, ctx)
+
+        // Assert
+        assertEquals(CapabilityResult.Done, result)
+    }
+
+    @Test
+    fun handle_throwsException_whenEmptyAuthorizationServers() = runTest {
+        // Arrange
+        val resource = "https://api.example.com"
+        val api = FakeApi(
+            resJson =
+            mapOf(
+                resource to
+                    Json.encodeToString(getDummyProtectedResourceObject(resource, emptyList())),
+            ),
+        )
+        val h = ConfigurationHandler(api, createAuthConfig(), FakeValidator())
+
+        // Act & Assert
+        val ex = assertFailsWith<ConfigurationHandler.ConfigurationError.AuthorizationServerMissing> {
+            h.handle(FlowNeed.ConfigurationFiles, getDummyFlowContext())
+        }
+        assertTrue(ex.message!!.contains("No authorization_servers"))
+    }
+
+    @Test
+    @Ignore
+    fun handle_throwsValidationException_whenSchemaValidationFails() = runTest {
+        // Arrange
+        val resource = "https://api.example.com"
+        val api = FakeApi(
+            resJson =
+            mapOf(
+                resource to
+                    Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(resource))),
+            ),
+            authJson = mapOf(resource to Json.encodeToString(getDummyAuthServerObject(resource))),
+        )
+        val validator = FakeValidator(isValid = false)
+        val h = ConfigurationHandler(api, createAuthConfig(), validator)
+        val ctx = getDummyFlowContext()
+
+        // Act & Assert
+        val ex = assertFailsWith<ConfigurationHandler.ConfigurationError.ValidationFailed> {
+            h.handle(FlowNeed.ConfigurationFiles, ctx)
+        }
+        assertTrue(ex.message!!.contains("Failed to validate"))
+    }
+
+    @Test
+    @Ignore
+    fun handle_throwsException_whenValidationThrowsAnException() = runTest {
+        // Arrange
+        val resource = "https://api.example.com"
+        val api = FakeApi(
+            resJson =
+            mapOf(
+                resource to
+                    Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(resource))),
+            ),
+            authJson = mapOf(resource to Json.encodeToString(getDummyAuthServerObject(resource))),
+        )
+        val validator = FakeValidator(isValid = true, 0, true)
+        val h = ConfigurationHandler(api, createAuthConfig(), validator)
+        val ctx = getDummyFlowContext()
+
+        // Act & Assert
+        val ex = assertFailsWith<ConfigurationHandler.ConfigurationError.ValidationFailed> {
+            h.handle(FlowNeed.ConfigurationFiles, ctx)
+        }
+        assertTrue(ex.message!!.contains("Validation threw for"))
+    }
+
+    @Test
+    fun handle_throwsException_whenScopeValidationThrowsAnException() = runTest {
+        val resource = "https://api.example.com"
+        val api = FakeApi(
+            resJson = mapOf(
+                resource to Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(resource))),
+            ),
+            authJson = mapOf(resource to Json.encodeToString(getDummyAuthServerObject(resource))),
+        )
+        val validator = FakeValidator(isValid = true, 0)
+        val h = ConfigurationHandler(api, createAuthConfig(listOf("missing_scope")), validator)
+        val ctx = getDummyFlowContext()
+
+        val ex = assertFailsWith<ConfigurationHandler.ConfigurationError.ScopesNotSupported> {
+            h.handle(FlowNeed.ConfigurationFiles, ctx)
+        }
+        assertTrue(ex.message!!.contains("missing_scope"))
+    }
+    private fun createAuthConfig(scopes: List<String> = emptyList()) =
+        AuthConfig(scopes, 300, true, SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")), requiredRoleOid = "1.2.276.0.76.4.261")
 }

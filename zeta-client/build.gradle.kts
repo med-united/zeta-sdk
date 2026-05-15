@@ -27,7 +27,6 @@ setupBuildLogic {
             api(libs.androidx.lifecycle.runtime.compose)
             api(libs.androidx.lifecycle.viewmodel.compose)
             api(libs.reactivestate.compose)
-            api(libs.logger.napier)
             api(libs.okio)
             api(project(":zeta-sdk"))
         }

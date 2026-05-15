@@ -31,7 +31,9 @@ import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaSignatureAlgorithm
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaTlsCurves
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaTlsProtocols
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaTlsValidator
+import de.gematik.zeta.sdk.network.http.client.config.tls.sanMatchesHost
 import de.gematik.zeta.sdk.network.http.client.config.tls.toZetaCertInfo
+import org.bouncycastle.asn1.x509.GeneralName
 import java.net.InetAddress
 import java.net.Socket
 import java.security.cert.X509Certificate
@@ -77,9 +79,7 @@ internal class ZetaSslSocketFactory(
 
         params.namedGroups = ZetaTlsCurves.ALLOWED.toTypedArray()
 
-        params.signatureSchemes?.let {
-            params.signatureSchemes = ZetaSignatureAlgorithms.ALLOWED_WITH_RSA.toTypedArray()
-        }
+        params.signatureSchemes = ZetaSignatureAlgorithms.ALLOWED.toTypedArray()
 
         socket.sslParameters = params
 
@@ -103,10 +103,28 @@ internal class ZetaSslSocketFactory(
 }
 private fun onHandshakeCompleted(event: HandshakeCompletedEvent) {
     val session = event.session
-    val x509 = event.session.peerCertificates.firstOrNull() as? X509Certificate ?: return
+    val x509 = session.peerCertificates.firstOrNull() as? X509Certificate ?: return
 
-    Log.i { "ZetaTls: handshake completed cipher=${session.cipherSuite}, protocol=${session.protocol}" }
-    Log.i { "ZetaTls: leaf cert sigAlg=${x509.sigAlgName}, keyAlg=${x509.publicKey.algorithm}" }
+    val peerHost = session.peerHost
+    val sanDnsNames = x509.subjectAlternativeNames
+        ?.filter { it[0] == GeneralName.dNSName }
+        ?.map { it[1] as String }
+        ?: emptyList()
+
+    if (sanDnsNames.isEmpty()) {
+        Log.e { "ZetaTls: certificate has no SAN entries for host=$peerHost — rejecting" }
+        runCatching { event.socket.close() }
+        return
+    }
+
+    val sanValid = sanDnsNames.any { san -> sanMatchesHost(san, peerHost) }
+    if (!sanValid) {
+        Log.e { "ZetaTls: SAN mismatch: host=$peerHost SANs=$sanDnsNames" }
+        runCatching { event.socket.close() }
+        return
+    }
+
+    Log.i { "ZetaTls: SAN validated: host=$peerHost matched in $sanDnsNames" }
 
     val certResult = ZetaCertificateValidator.validate(
         cert = x509.toZetaCertInfo(),
@@ -116,5 +134,4 @@ private fun onHandshakeCompleted(event: HandshakeCompletedEvent) {
         Log.e { "ZetaTls: cert validation FAILED: ${certResult.errors}" }
         runCatching { event.socket.close() }
     }
-    certResult.warnings.forEach { Log.w { "ZetaTls: $it" } }
 }

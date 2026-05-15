@@ -34,6 +34,11 @@ interface SdkStorage {
     suspend fun clear()
 }
 
+sealed class StorageConfig {
+    data class Default(val aesB64Key: String, val linuxFilePath: String? = null) : StorageConfig()
+    data class Custom(val provider: SdkStorage) : StorageConfig()
+}
+
 class ExtendedStorage(private val storage: SdkStorage) {
     companion object {
         private const val HASH_RADIX = 36 // numbers and letters
@@ -52,7 +57,7 @@ class ExtendedStorage(private val storage: SdkStorage) {
         }.getOrNull()
     }
 
-    suspend fun putMap(key: String, map: MutableMap<String, String>) =
+    suspend fun putMap(key: String, map: Map<String, String>) =
         storage.put(key, json.encodeToString<Map<String, String>>(map))
 
     /** Upserts a map entry under [key]. */

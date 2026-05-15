@@ -39,11 +39,11 @@
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define BUFFER_SIZE 1024
 
-static const char* POPP_HEADER        = "PoPP";
-static const char* PRODUCT_ID         = "demo-client";
-static const char* PRODUCT_VERSION    = "0.5.0";
-static const char* CLIENT_NAME        = "sdk-client";
-static const char* SCOPE_ZERO         = "zero:audience";
+static const char* POPP_HEADER     = "PoPP";
+static const char* PRODUCT_ID      = "ZETA-Test-Client";
+static const char* PRODUCT_VERSION = "1.0.0";
+static const char* CLIENT_NAME     = "cpp-client";
+static const char* SCOPE_ZERO      = "zero:audience";
 
 char* stompConnectFrame(const char* host) {
     char* buffer = new char[BUFFER_SIZE];
@@ -181,6 +181,8 @@ int main() {
     char* wsBaseUrl     = std::getenv("WS_BASE_URL");
     char* wsContextPath = std::getenv("WS_SERVER_CONTEXT_PATH");
     char* poppToken     = std::getenv("POPP_TOKEN");
+    char* aesB64Key     = std::getenv("STORAGE_AES_KEY");
+    char* requiredRoleOid = std::getenv("REQUIRED_ROLE_OID");
 
     char* disableTlsValue = std::getenv("DISABLE_SERVER_VALIDATION");
     bool disableTls = disableTlsValue && strcmp(disableTlsValue, "true") == 0;
@@ -189,10 +191,15 @@ int main() {
     bool aslProd = !aslProdValue || strcmp(aslProdValue, "true") == 0;
 
     char* scopes[] = {(char*)SCOPE_ZERO};
-    ZetaSdk_StorageConfig storageConfig = {};
+    ZetaSdk_StorageConfig storageConfig = {
+            aesB64Key,
+            nullptr,
+            nullptr,
+    };
+
     ZetaSdk_TpmConfig tpmConfig = {};
     ZetaSdk_SmbConfig smbConfig = { keystoreFile, alias, password };
-    ZetaSdk_AuthConfig authConfig = { scopes, ARRAY_SIZE(scopes), 30, aslProd, &smbConfig, nullptr };
+    ZetaSdk_AuthConfig authConfig = { scopes, ARRAY_SIZE(scopes), 30, aslProd, &smbConfig, nullptr, requiredRoleOid };
     ZetaSdk_BuildConfig buildConfig = {
             resource,
             const_cast<char*>(PRODUCT_ID),

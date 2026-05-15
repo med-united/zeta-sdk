@@ -29,7 +29,6 @@ import de.gematik.zeta.logging.Log
 import de.gematik.zeta.platform.Platform
 import de.gematik.zeta.platform.platform
 import de.gematik.zeta.sdk.BuildConfig
-import de.gematik.zeta.sdk.StorageConfig
 import de.gematik.zeta.sdk.TpmConfig
 import de.gematik.zeta.sdk.ZetaSdk
 import de.gematik.zeta.sdk.ZetaSdk.forget
@@ -42,8 +41,8 @@ import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpResponse
 import de.gematik.zeta.sdk.storage.SdkStorage
+import de.gematik.zeta.sdk.storage.StorageConfig
 import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.setBody
 import io.ktor.content.ByteArrayContent
@@ -70,16 +69,13 @@ import io.ktor.websocket.readReason
 import io.ktor.websocket.readText
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import java.lang.System
 import kotlin.time.TimeSource
 import kotlin.time.measureTimedValue
 
 internal const val DISABLE_SERVER_VALIDATION = "DISABLE_SERVER_VALIDATION"
-internal const val POPP_TOKEN_HEADER_NAME = "PoPP"
+internal const val FACHDIENST_URL_REQUIRED_MESSAGE = "fachdienstUrl is required"
 
-internal val logger: Logger = object : Logger {
-    override fun log(message: String) = println(message)
-}
+internal const val POPP_TOKEN_HEADER_NAME = "PoPP"
 
 internal fun shouldForwardHeader(name: String): Boolean {
     return notForwardedHeaders.none { it.equals(name, ignoreCase = true) }
@@ -97,15 +93,17 @@ internal suspend fun forward(
     httpClient: ZetaHttpClient,
     config: SdkInstanceConfig,
 ) {
-    val fachdienstUrl = requireNotNull(config.fachdienstUrl) { "fachdienstUrl is required" }
+    val fachdienstUrl = requireNotNull(config.fachdienstUrl) { FACHDIENST_URL_REQUIRED_MESSAGE }
     val targetUrl = buildTargetUrl(call, fachdienstUrl)
     val requestBody = extractRequestBody(call)
-    val hasPopp = call.request.headers.contains(POPP_TOKEN_HEADER_NAME)
     val forwardStart = TimeSource.Monotonic.markNow()
 
     try {
+        val requestPoppToken = call.request.headers[POPP_TOKEN_HEADER_NAME]
+        val effectivePoppToken = requestPoppToken ?: config.poppToken.ifBlank { null }
+
         val (response, httpTime) = measureTimedValue {
-            executeHttpRequest(httpClient, targetUrl, call, requestBody, hasPopp, config.poppToken)
+            executeHttpRequest(httpClient, targetUrl, call, requestBody, effectivePoppToken)
         }
 
         Log.i { "[TESTDRIVER-FORWARD-TIMING] url=$targetUrl method=${call.request.httpMethod.value} http_request=$httpTime status=${response.status}" }
@@ -135,7 +133,6 @@ private suspend fun executeHttpRequest(
     targetUrl: String,
     call: ApplicationCall,
     requestBody: ByteArray?,
-    hasPopp: Boolean,
     poppToken: String?,
 ): ZetaHttpResponse {
     return httpClient.request(targetUrl) {
@@ -144,9 +141,7 @@ private suspend fun executeHttpRequest(
             call.request.headers.forEach { name, values ->
                 if (shouldForwardHeader(name)) headers.appendAll(name, values)
             }
-            if (!hasPopp) {
-                poppToken?.let { headers.append(POPP_TOKEN_HEADER_NAME, it) }
-            }
+            poppToken?.let { headers.append(POPP_TOKEN_HEADER_NAME, it) }
         }
         if (requestBody != null) {
             setRequestBody(this, call, requestBody)
@@ -197,7 +192,7 @@ public suspend fun forwardWs(
 ): Unit = coroutineScope {
     val customHeaders = wsCustomHeaders(config.poppToken)
 
-    sdk.ws(targetUrl, wsClientConfig(), customHeaders) {
+    sdk.ws(targetUrl, wsClientConfig(config), customHeaders) {
         val backendSession = this
 
         val clientToBackend = launch { forwardFrames(serverSession, backendSession) }
@@ -223,7 +218,7 @@ public fun buildWsTargetUrl(
     config: SdkInstanceConfig,
     prefixToRemove: String = "/proxy",
 ): String {
-    val fachdienstUrl = requireNotNull(config.fachdienstUrl) { "fachdienstUrl is required" }
+    val fachdienstUrl = requireNotNull(config.fachdienstUrl) { FACHDIENST_URL_REQUIRED_MESSAGE }
     val base = Url(fachdienstUrl)
     val afterProxy = call
         .request
@@ -251,9 +246,9 @@ public fun buildWsTargetUrl(
     return builder.buildString()
 }
 
-private fun wsClientConfig(): ZetaHttpClientBuilder.() -> Unit = {
-    logging(LogLevel.ALL, logger)
-    disableServerValidation("true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()))
+private fun wsClientConfig(instanceConfig: SdkInstanceConfig): ZetaHttpClientBuilder.() -> Unit = {
+    logging(LogLevel.ALL)
+    disableServerValidation(instanceConfig.disableTlsVerification)
 }
 
 private suspend fun forwardFrames(
@@ -277,7 +272,7 @@ private suspend fun forwardFrames(
 }
 
 public fun newSdk(storage: SdkStorage, config: SdkInstanceConfig): ZetaSdkClient {
-    val fachdienstUrl = requireNotNull(config.fachdienstUrl) { "fachdienstUrl is required" }
+    val fachdienstUrl = requireNotNull(config.fachdienstUrl) { FACHDIENST_URL_REQUIRED_MESSAGE }
 
     return ZetaSdk.build(
         resource = fachdienstUrl,
@@ -285,7 +280,7 @@ public fun newSdk(storage: SdkStorage, config: SdkInstanceConfig): ZetaSdkClient
             "test-proxy",
             "0.5.0",
             "sdk-client",
-            StorageConfig(storage),
+            StorageConfig.Custom(storage),
             object : TpmConfig {},
             AuthConfig(
                 listOf("zero:audience"),
@@ -325,12 +320,13 @@ public fun newSdk(storage: SdkStorage, config: SdkInstanceConfig): ZetaSdkClient
                     else ->
                         error("No SM-B or SMC-B configuration was provided")
                 },
+                requiredRoleOid = config.requiredOid,
             ),
             platformProductId = getPlatformProduct(),
             ZetaHttpClientBuilder()
                 .timeouts(20000, 20000)
-                .disableServerValidation("true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()))
-                .logging(LogLevel.ALL, logger)
+                .disableServerValidation(config.disableTlsVerification)
+                .logging(LogLevel.ALL)
                 .apply {
                     customCaPems.forEach { pem ->
                         addCaPem(pem)

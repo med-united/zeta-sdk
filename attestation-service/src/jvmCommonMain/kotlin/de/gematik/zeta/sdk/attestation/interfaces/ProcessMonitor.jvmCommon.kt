@@ -24,30 +24,27 @@
 
 package de.gematik.zeta.sdk.attestation.interfaces
 
+import de.gematik.zeta.sdk.attestation.interfaces.FileHashCalculator.NOT_IN_SCOPE_TARGET
 import io.ktor.http.RequestConnectionPoint
 
 actual class ProcessMonitor actual constructor(allowedExecutables: List<String>) {
     actual fun isRunning(processName: String): Boolean {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun findSocketAndPid(origin: RequestConnectionPoint): Int? {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun getProcessName(pid: Int?): String? {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun getProcessExecutablePath(pid: Int?): String? {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun isProcessAllowed(origin: RequestConnectionPoint): Boolean {
-        TODO("Not yet implemented")
+        error(NOT_IN_SCOPE_TARGET)
     }
-}
-
-actual fun getEnv(variable: String): String? {
-    return System.getenv(variable)
 }

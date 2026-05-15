@@ -21,17 +21,26 @@ setupBuildLogic {
                 implementation(libs.ktor.server.websockets.jvm)
                 implementation(libs.ktor.server.content.negotiation)
                 implementation(libs.ktor.serialization.json)
+                implementation(kotlin("test"))
+                implementation(libs.coroutines.test)
+                implementation(libs.ktor.client.mock)
 
                 implementation(libs.netty.codec.http) {
                     version {
-                        // fixing CVE-2026-33870 and CVE-2026-3387
-                        strictly("4.2.11.Final")
+                        // fixing CVE-2026-42587, CVE-2026-33870 and CVE-2026-3387
+                        strictly("4.2.13.Final")
                     }
                 }
                 implementation(libs.netty.codec.http2) {
                     version {
-                        // fixing CVE-2026-33870 and CVE-2026-3387
-                        strictly("4.2.11.Final")
+                        // fixing CVE-2026-42587, CVE-2026-33870 and CVE-2026-3387
+                        strictly("4.2.13.Final")
+                    }
+                }
+                implementation(libs.netty.transport.native.epoll) {
+                    version {
+                        // fixing CVE-2026-42587
+                        strictly("4.2.13.Final")
                     }
                 }
             }
@@ -45,6 +54,8 @@ setupBuildLogic {
 
 version=""
 var copyBuild = tasks.register<Copy>("copyRuntimeLibs"){
+    group = "build"
+    description = "Copies runtime dependencies to build/runtime-libs"
     from(configurations.runtimeClasspath)
     into(layout.projectDirectory.dir("build/runtime-libs"))
 }

@@ -37,11 +37,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -101,11 +103,19 @@ public fun PrescriptionListComponent() {
                 Text("Add")
             }
             Spacer(modifier = Modifier.weight(1f))
+            Button(onClick = viewModel::logoutAuthorization) {
+                Text("Logout")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
             Button(onClick = viewModel::forgetAuthorization) {
                 Text("Forget")
             }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(onClick = viewModel::statusSdk) {
+                Text("Status")
+            }
         }
-        when (state) {
+        when (val s = state) {
             is PrescriptionListState.Result -> PrescriptionList(
                 (state as PrescriptionListState.Result).result,
                 {
@@ -114,6 +124,16 @@ public fun PrescriptionListComponent() {
                 },
                 viewModel::deletePrescription,
             )
+            is PrescriptionListState.StatusResult -> {
+                AlertDialog(
+                    onDismissRequest = viewModel::dismissStatus,
+                    title = { Text("SDK Status") },
+                    text = { Text(s.status.name) },
+                    confirmButton = {
+                        TextButton(onClick = viewModel::dismissStatus) { Text("OK") }
+                    },
+                )
+            }
 
             is MviState.Loading -> LoadingIndicator()
 

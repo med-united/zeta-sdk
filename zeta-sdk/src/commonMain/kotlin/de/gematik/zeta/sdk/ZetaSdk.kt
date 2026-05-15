@@ -43,19 +43,18 @@ import de.gematik.zeta.sdk.flow.handler.AslHandler
 import de.gematik.zeta.sdk.flow.handler.ClientRegistrationHandler
 import de.gematik.zeta.sdk.flow.handler.ConfigurationHandler
 import de.gematik.zeta.sdk.flow.handler.EnsureAccessTokenHandler
+import de.gematik.zeta.sdk.flow.handler.RetryHandler
 import de.gematik.zeta.sdk.flow.zetaPlugin
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
-import de.gematik.zeta.sdk.network.http.client.ZetaHttpResponse
 import de.gematik.zeta.sdk.storage.SdkStorage
+import de.gematik.zeta.sdk.storage.StorageConfig
 import de.gematik.zeta.sdk.storage.provideSdkStorage
 import de.gematik.zeta.sdk.tpm.TpmProvider
 import de.gematik.zeta.sdk.tpm.platformDefaultProvider
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
-import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.request.url
 import io.ktor.http.HttpHeaders
@@ -98,7 +97,7 @@ object ZetaSdk {
                 flowContext.aslStorage.clear()
             }
 
-            else -> this.close().getOrThrow()
+            else -> this.logout().getOrThrow()
         }
     }
 }
@@ -110,31 +109,34 @@ private class ZetaSdkClientImpl(
     private lateinit var mainHttpClient: ZetaHttpClient
     private val httpClientBuilder: ZetaHttpClientBuilder = (
         cfg.httpClientBuilder
-            ?: ZetaHttpClientBuilder()
-                .logging(
-                    LogLevel.ALL,
-                    object : Logger {
-                        override fun log(message: String) {
-                            println(message)
-                        }
-                    },
-                )
-                .disableServerValidation(true)
+            ?: ZetaHttpClientBuilder().logging(LogLevel.ALL)
         )
-    private val forwardingClient = object : ForwardingClient {
-        override suspend fun executeOnce(builder: HttpRequestBuilder): ZetaHttpResponse = mainHttpClient.request {
+
+    init {
+        cfg.logger?.let { Log.setLogger(it) }
+    }
+    private val forwardingClient = ForwardingClient { builder ->
+        mainHttpClient.request {
             takeFrom(builder)
         }
     }
 
-    private val storage: SdkStorage = cfg.storageConfig.provider ?: provideSdkStorage(cfg.storageConfig.aesB64Key)
+    private var clientRegistrationApiClient: ZetaHttpClient? = null
+    private var authApiClient: ZetaHttpClient? = null
+    private var aslApiClient: ZetaHttpClient? = null
+
+    private val storage: SdkStorage = when (val storageConfig = cfg.storageConfig) {
+        is StorageConfig.Default -> provideSdkStorage(storageConfig)
+        is StorageConfig.Custom -> storageConfig.provider
+    }
+
     val flowContext = FlowContextImpl(resource, forwardingClient, storage)
     private val configHandler: ConfigurationHandler by lazy {
         ConfigurationHandler(ConfigurationApiImpl(httpClientBuilder), cfg.authConfig)
     }
     val tpmProvider: TpmProvider = platformDefaultProvider(flowContext.tpmStorage)
     private val clientRegistrationHandler: ClientRegistrationHandler by lazy {
-        ClientRegistrationHandler(cfg.clientName, ClientRegistrationApiImpl(httpClientBuilder.build()), tpmProvider)
+        ClientRegistrationHandler(cfg.clientName, ClientRegistrationApiImpl(httpClientBuilder.build().also { clientRegistrationApiClient = it }), tpmProvider)
     }
 
     private lateinit var accessTokenProvider: AccessTokenProvider
@@ -142,7 +144,7 @@ private class ZetaSdkClientImpl(
         accessTokenProvider = AccessTokenProviderImpl(
             resource,
             cfg.authConfig,
-            AuthenticationApiImpl(httpClientBuilder.build()),
+            AuthenticationApiImpl(httpClientBuilder.build().also { authApiClient = it }),
             flowContext.authenticationStorage,
             { System.now().epochSeconds },
             tpmProvider,
@@ -154,6 +156,7 @@ private class ZetaSdkClientImpl(
             cfg.productId,
             cfg.productVersion,
             cfg.platformProductId,
+            clientRegistrationHandler,
         )
     }
     private lateinit var aslApi: AslApi
@@ -161,8 +164,9 @@ private class ZetaSdkClientImpl(
         aslApi = AslApiImpl(
             resource,
             cfg.authConfig.aslProdEnvironment,
+            cfg.authConfig.requiredRoleOid,
             flowContext.aslStorage,
-            httpClientBuilder.build(),
+            httpClientBuilder.build().also { aslApiClient = it },
             accessTokenProvider,
             tpmProvider,
             !httpClientBuilder.isServerValidationDisabled,
@@ -178,12 +182,15 @@ private class ZetaSdkClientImpl(
                 clientRegistrationHandler,
                 authHandler,
                 aslHandler,
+                RetryHandler(),
             ),
         )
 
     override suspend fun discover(): Result<Unit> = runCatching {
         val (result, time) = measureTimedValue {
+            Log.i { "[SDK-DISCOVER] start" }
             configHandler.handle(FlowNeed.ConfigurationFiles, flowContext)
+            Log.i { "[SDK-DISCOVER] end" }
         }
         Log.i { "[SDK-TIMING] discover (configHandler)=$time result=$result" }
         result
@@ -233,7 +240,7 @@ private class ZetaSdkClientImpl(
         discover().getOrThrow()
         register().getOrThrow()
 
-        val (token, dpopKey) = authHandler.getValidAccessToken(flowContext)
+        val (token, dpopKey) = authHandler.getValidAccessTokenWithStepUp(flowContext)
         require(token.isNotBlank())
 
         val hashedToken = accessTokenProvider.hash(token)
@@ -256,7 +263,44 @@ private class ZetaSdkClientImpl(
         }
     }
 
+    override suspend fun status(): Result<SdkStatus> = runCatching {
+        val resource = flowContext.resource
+
+        val authServer = flowContext.configurationStorage.getAuthServer(resource)
+            ?: return@runCatching SdkStatus.NOT_REGISTERED
+
+        flowContext.clientRegistrationStorage.getRegistrationInfo(authServer.issuer)
+            ?: return@runCatching SdkStatus.NOT_REGISTERED
+
+        val nowEpoch = System.now().epochSeconds
+        val expiresAtStr = flowContext.authenticationStorage.getTokenExpiration(resource)
+        val expiresAt = expiresAtStr?.toLongOrNull() ?: 0L
+        val tokensExpired = expiresAt <= nowEpoch
+
+        val accessToken = flowContext.authenticationStorage.getAccessToken(resource)
+        val refreshToken = flowContext.authenticationStorage.getRefreshToken(resource)
+
+        when {
+            !accessToken.isNullOrBlank() && !refreshToken.isNullOrBlank() && !tokensExpired ->
+                SdkStatus.HAS_ACCESS_AND_REFRESH_TOKEN
+
+            !refreshToken.isNullOrBlank() ->
+                SdkStatus.HAS_REFRESH_TOKEN
+
+            else ->
+                SdkStatus.REGISTERED_NO_VALID_TOKENS
+        }
+    }
+
+    override suspend fun logout(): Result<Unit> = runCatching {
+        flowContext.authenticationStorage.clear()
+        flowContext.tpmStorage.deleteAllDpopKeys()
+    }
+
     override suspend fun close(): Result<Unit> = runCatching {
-        TODO("Has to be implemented")
+        if (::mainHttpClient.isInitialized) mainHttpClient.close()
+        clientRegistrationApiClient?.close()
+        authApiClient?.close()
+        aslApiClient?.close()
     }
 }

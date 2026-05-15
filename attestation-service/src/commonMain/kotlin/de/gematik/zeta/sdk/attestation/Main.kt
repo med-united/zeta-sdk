@@ -80,9 +80,6 @@ fun main(args: Array<String>) {
     } else {
         Log.i { "TMP available" }
     }
-    // testPCR(tpm)
-    // testGetQuote(tpm)
-    // testTPMKeyStorage(tpm)
 
     val tpmOps = TpmAccessAdapter(tpm)
     val processMonitorOps = ProcessMonitorAdapter(ProcessMonitor(config.allowedExecutables))
@@ -109,60 +106,6 @@ fun main(args: Array<String>) {
     val server = AttestationServer(config, service)
     server.start()
 }
-
-fun testPCR(tpm: TpmAccess) {
-    val initial = tpm.readPCRs(listOf(10))
-    Log.d { "Initial: ${initial[23]?.toHexString()}" }
-
-    val hash = byteArrayOf(
-        0x6c.toByte(), 0xa1.toByte(), 0x3d.toByte(), 0x52.toByte(),
-        0x6c.toByte(), 0xa1.toByte(), 0x3d.toByte(), 0x52.toByte(),
-        0x6c.toByte(), 0xa1.toByte(), 0x3d.toByte(), 0x52.toByte(),
-        0x6c.toByte(), 0xa1.toByte(), 0x3d.toByte(), 0x52.toByte(),
-        0x6c.toByte(), 0xa1.toByte(), 0x3d.toByte(), 0x52.toByte(),
-        0x6c.toByte(), 0xa1.toByte(), 0x3d.toByte(), 0x52.toByte(),
-        0x6c.toByte(), 0xa1.toByte(), 0x3d.toByte(), 0x52.toByte(),
-        0x6c.toByte(), 0xa1.toByte(), 0x3d.toByte(), 0x52.toByte(),
-    )
-
-    tpm.extendPCR(23, hash)
-
-    val updated = tpm.readPCRs(listOf(23))
-    Log.d { "After extend:  ${updated[23]?.toHexString()}" }
-
-    tpm.resetPCR(23)
-    val reset = tpm.readPCRs(listOf(23))
-
-    Log.d { "After reset:  ${reset[23]?.toHexString()}" }
-}
-
-fun testGetQuote(tpm: TpmAccess) {
-    Log.i { "TEST GENERATE QUOTE" }
-
-    try {
-        if (!tpm.isAvailable()) {
-            Log.d { "TPM not available" }
-            return
-        }
-        Log.i { "TPM is available" }
-
-        val nonce = generateRandomNonce(32)
-
-        val result = tpm.generateQuote(nonce, listOf(23))
-        Log.d { "QUOTE:" + result.quote }
-        Log.d { "SIGNATURE:" + result.signature }
-        Log.d { "ATTESTATION KEY:" + result.attestationKey }
-    } catch (e: Exception) {
-        Log.d { e.message.toString() }
-    }
-}
-
-fun generateRandomNonce(size: Int): ByteArray {
-    return ByteArray(size) {
-        (kotlin.random.Random.nextInt(256)).toByte()
-    }
-}
-
 private class TpmAccessAdapter(private val delegate: TpmAccess) : TpmAccessOperations {
     override fun isAvailable() = delegate.isAvailable()
     override fun readPCRs(pcrSelection: List<Int>) = delegate.readPCRs(pcrSelection)

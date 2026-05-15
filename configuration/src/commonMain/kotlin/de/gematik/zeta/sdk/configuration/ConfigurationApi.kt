@@ -25,6 +25,8 @@
 package de.gematik.zeta.sdk.configuration
 
 import de.gematik.zeta.logging.Log
+import de.gematik.zeta.sdk.configuration.models.AUTHORIZATION_SERVER_SCHEMA_JSON
+import de.gematik.zeta.sdk.configuration.models.PROTECTED_RESOURCE_SCHEMA_JSON
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpResponse
 import io.ktor.client.statement.HttpResponse
@@ -66,12 +68,21 @@ class ConfigurationApiImpl(
      * @return The raw JSON payload as a UTF-8 text [String].
      */
     override suspend fun fetchResourceMetadata(resourceUrl: String): String {
-        val baseUrl = protectedBaseUrl(resourceUrl)
-
-        val response = httpClientBuilder.build(baseUrl)
-            .get(PROTECTED_RESOURCE_PATH)
-
-        return handleResponse(resourceUrl + PROTECTED_RESOURCE_PATH, response)
+        return try {
+            Log.i { "[ZETA-SDK] fetchResourceMetadata get base Url for: $resourceUrl" }
+            val baseUrl = protectedBaseUrl(resourceUrl)
+            Log.i { "[ZETA-SDK] fetchResourceMetadata http get base Url for: $PROTECTED_RESOURCE_PATH" }
+            val client = httpClientBuilder.build(baseUrl)
+            try {
+                val response = client.get(PROTECTED_RESOURCE_PATH)
+                handleResponse(resourceUrl + PROTECTED_RESOURCE_PATH, response)
+            } finally {
+                client.close()
+            }
+        } catch (e: Exception) {
+            Log.e { "[ZETA-SDK] fetchResourceMetadata failed: ${e::class.simpleName} - ${e.message}" }
+            throw e
+        }
     }
 
     /**
@@ -83,11 +94,19 @@ class ConfigurationApiImpl(
      */
     override suspend fun fetchAuthorizationMetadata(authFqdns: String): String {
         val baseUrl = protectedBaseUrl(authFqdns)
-
-        val response = httpClientBuilder.build(baseUrl)
-            .get(AUTH_SERVER_PATH)
-
-        return handleResponse(authFqdns + AUTH_SERVER_PATH, response)
+        Log.i { "[ZETA-SDK] fetchAuthorizationMetadata http get base Url for: $AUTH_SERVER_PATH" }
+        return try {
+            val client = httpClientBuilder.build(baseUrl)
+            try {
+                val response = client.get(AUTH_SERVER_PATH)
+                handleResponse(authFqdns + AUTH_SERVER_PATH, response)
+            } finally {
+                client.close()
+            }
+        } catch (e: Exception) {
+            Log.e { "[ZETA-SDK] fetchAuthorizationMetadata failed: ${e::class.simpleName} - ${e.message}" }
+            throw e
+        }
     }
 
     /**
@@ -96,7 +115,7 @@ class ConfigurationApiImpl(
      * @return The schema JSON as a [String].
      */
     override suspend fun getAuthorizationSchema(): String =
-        loadResource("as-well-known.json")
+        AUTHORIZATION_SERVER_SCHEMA_JSON
 
     /**
      * Loads the JSON Schema that validates the *Protected Resource* well-known document.
@@ -104,7 +123,7 @@ class ConfigurationApiImpl(
      * @return The schema JSON as a [String].
      */
     override suspend fun getResourceSchema(): String =
-        loadResource("opr-well-known.json")
+        PROTECTED_RESOURCE_SCHEMA_JSON
 }
 
 private fun protectedBaseUrl(resourceUrl: String): String {
@@ -123,25 +142,16 @@ private fun protectedBaseUrl(resourceUrl: String): String {
 private suspend fun handleResponse(resourceUrl: String, response: ZetaHttpResponse): String {
     return when (response.status) {
         HttpStatusCode.OK -> {
+            Log.i { "[ZETA-SDK] handleResponse OK: ${response.status}" }
             response.bodyAsText()
         }
 
         else -> {
+            Log.i { "[ZETA-SDK] handleResponse failed: ${response.raw}" }
             throw ServiceDiscoveryException(response.raw, "Service discovery failed to load resource: $resourceUrl")
         }
     }
 }
-
-/**
- * Loads a text resource packaged with the application.
- *
- * This is declared as `expect` in common code and must be provided by each platform
- *
- * @param fileName File name of the resource (e.g., `"as-well-known.json"`).
- * @return File contents as a [String].
- * @throws IllegalStateException if the resource cannot be found or read (platform-dependent).
- */
-expect fun loadResource(fileName: String): String
 
 class ServiceDiscoveryException(
     val response: HttpResponse,

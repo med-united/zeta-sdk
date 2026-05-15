@@ -54,7 +54,7 @@ internal suspend fun validateRevocation(
 
     Log.w { "Direct OCSP failed: ${ocspAttempt.error}" }
 
-    val crlAttempt = tryDirectCrl(certDer, issuerDer, httpClient)
+    val crlAttempt = tryDirectCrl(certDer, issuerDer, httpClient, ocspValidator)
     if (crlAttempt.success) {
         Log.i { "Successfully validated via CRL" }
         return
@@ -87,7 +87,7 @@ private suspend fun tryDirectOcsp(
     maxOcspAgeSeconds: Long,
 ): ValidationAttempt {
     return try {
-        val ocspRequestData = OcspHandler().prepareOcspRequest(certDer, issuerDer)
+        val ocspRequestData = ocspValidator.prepareOcspRequest(certDer, issuerDer)
         val ocspResponse = fetchOcspDirect(ocspRequestData.url, ocspRequestData.requestDer, httpClient)
         validateOcspResponse(ocspResponse, certDer, issuerDer, ocspValidator, maxOcspAgeSeconds)
         ValidationAttempt(success = true)
@@ -100,16 +100,17 @@ private suspend fun tryDirectCrl(
     certDer: ByteArray,
     issuerDer: ByteArray,
     httpClient: ZetaHttpClient,
+    ocspValidator: OcspHandler,
 ): ValidationAttempt {
     return try {
-        val crlUrl = OcspHandler().extractCrlUrl(certDer)
+        val crlUrl = ocspValidator.extractCrlUrl(certDer)
             ?: return ValidationAttempt(success = false, error = "No CRL URL in certificate")
 
         Log.i { "Fetching CRL from: $crlUrl" }
         val crlDer = httpClient.get(crlUrl).bodyAsBytes()
         Log.i { "CRL fetched: ${crlDer.size} bytes" }
 
-        OcspHandler().validateCrl(crlDer, certDer, issuerDer)
+        ocspValidator.validateCrl(crlDer, certDer, issuerDer)
         ValidationAttempt(success = true)
     } catch (e: Exception) {
         ValidationAttempt(success = false, error = e.message ?: "Unknown error")

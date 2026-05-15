@@ -31,14 +31,14 @@ import de.gematik.zeta.logging.Log
 import de.gematik.zeta.sdk.crypto.AesGcmCipherImpl
 import java.util.prefs.Preferences
 
-actual fun provideSdkStorage(aesB64Key: String): SdkStorage {
+actual fun provideSdkStorage(config: StorageConfig.Default): SdkStorage {
     val preferences = Preferences.userRoot()
     val base = PreferencesSettings(preferences)
 
     val secureSettings = EncryptedSettings(
         delegate = base,
         cipher = AesGcmCipherImpl(),
-        cipherB64Key = aesB64Key,
+        cipherB64Key = config.aesB64Key,
     )
 
     val secretStore: SecretStore? = createOsSecretStore(service = "de.gematik.zeta.sdk")

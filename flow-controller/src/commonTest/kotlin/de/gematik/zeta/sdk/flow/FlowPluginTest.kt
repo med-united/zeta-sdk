@@ -24,12 +24,10 @@
 
 package de.gematik.zeta.sdk.flow
 
-import de.gematik.zeta.sdk.network.http.client.ZetaHttpResponse
 import de.gematik.zeta.sdk.storage.InMemoryStorage
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
-import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.test.runTest
@@ -50,11 +48,7 @@ class FlowPluginSuccessTest {
         val fo = FlowOrchestrator(listOf())
         val ctx = FlowContextImpl(
             "",
-            object : ForwardingClient {
-                override suspend fun executeOnce(builder: HttpRequestBuilder): ZetaHttpResponse {
-                    TODO("Not yet implemented")
-                }
-            },
+            { error("not in scope of the test") },
             storage = storage,
         )
 

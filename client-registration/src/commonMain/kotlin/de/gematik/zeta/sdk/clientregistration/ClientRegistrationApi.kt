@@ -35,7 +35,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 
-interface ClientRegistrationApi {
+fun interface ClientRegistrationApi {
     suspend fun register(endpoint: String, request: ClientRegistrationRequest): ClientRegistrationResponse
 }
 

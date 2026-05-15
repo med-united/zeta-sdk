@@ -71,6 +71,7 @@ class FlowOrchestrator(
     private val handlers: List<CapabilityHandler>,
     private val requestEvaluator: RequestEvaluator = RequestEvaluatorImpl(),
     private val responseEvaluator: ResponseEvaluator = ResponseEvaluatorImpl(),
+    private val maxIterations: Int = 3,
 ) {
 
     /**
@@ -82,18 +83,23 @@ class FlowOrchestrator(
      */
     suspend fun run(original: HttpRequestBuilder, ctx: FlowContext): HttpClientCall {
         val orchestratorStart = TimeSource.Monotonic.markNow()
+        val retryState = RetryState()
         val req = HttpRequestBuilder().takeFrom(original)
         val url = req.url.buildString()
 
         val (prerequisiteError, prereqTime) = measureTimedValue { executePrerequisites(req, ctx) }
-        Log.i { "[ORCHESTRATOR-TIMING] url=$url prerequisites=$prereqTime" }
+        Log.d { "[ORCHESTRATOR-TIMING] url=$url prerequisites=$prereqTime" }
         if (prerequisiteError != null) {
             return prerequisiteError.call
         }
 
-        val (result, execTime) = measureTimedValue { executeRequest(req, ctx) }
-        Log.i { "[ORCHESTRATOR-TIMING] url=$url executeRequest=$execTime total=${orchestratorStart.elapsedNow()}" }
+        val (result, execTime) = measureTimedValue { executeRequest(req, ctx, retryState) }
+        Log.d { "[ORCHESTRATOR-TIMING] url=$url executeRequest=$execTime total=${orchestratorStart.elapsedNow()}" }
         return result
+    }
+
+    class RetryState {
+        var hasAttemptedStepUp: Boolean = false
     }
 
     private suspend fun executePrerequisites(req: HttpRequestBuilder, ctx: FlowContext): HttpResponse? {
@@ -109,26 +115,26 @@ class FlowOrchestrator(
         return null
     }
 
-    private suspend fun executeRequest(req: HttpRequestBuilder, ctx: FlowContext): HttpClientCall {
-        val safetyIterationExitCount = 1
+    private suspend fun executeRequest(req: HttpRequestBuilder, ctx: FlowContext, retryState: RetryState): HttpClientCall {
+        val safetyIterationExitCount = maxIterations
         var iteration = 0
 
         while (true) {
             req.attributes.put(OrchestratorBypassKey, true)
             iteration++
-            Log.i { "Orchestrator iteration $iteration" }
+            Log.d { "Orchestrator iteration $iteration" }
 
             val resp = ctx.client.executeOnce(req)
             Log.d { "Response status: ${resp.raw.status}" }
 
-            when (val directive = responseEvaluator.evaluate(resp.raw.call, ctx)) {
+            when (val directive = responseEvaluator.evaluate(resp.raw.call, ctx, retryState)) {
                 is FlowDirective.Proceed -> {
-                    Log.i { "PROCEED: iteration=$iteration" }
+                    Log.d { "PROCEED: iteration=$iteration" }
                     return resp.raw.call
                 }
 
                 is FlowDirective.Perform -> {
-                    Log.i { "PERFORM: need=${directive.need}, iteration=$iteration" }
+                    Log.d { "PERFORM: need=${directive.need}, iteration=$iteration" }
                     executeNeed(directive.need, req, ctx, evaluatorMutation = directive.mutate)
                 }
 
@@ -155,26 +161,26 @@ class FlowOrchestrator(
         ctx: FlowContext,
         evaluatorMutation: ((HttpRequestBuilder) -> Unit)? = null,
     ): CapabilityResult {
-        Log.i { "Before proceeding with the request, the flow needs must executed: $need" }
+        Log.d { "Before proceeding with the request, the flow needs must executed: $need" }
         val handler = handlers.first { it.canHandle(need) }
 
         val (result, handlerTime) = measureTimedValue { handler.handle(need, ctx) }
-        Log.i { "[ORCHESTRATOR-TIMING] handler=${handler::class.simpleName} need=$need time=$handlerTime" }
+        Log.d { "[ORCHESTRATOR-TIMING] handler=${handler::class.simpleName} need=$need time=$handlerTime" }
         return when (result) {
             CapabilityResult.Done -> {
-                Log.i { "Flow executed successfully, proceeding with request" }
+                Log.d { "Flow executed successfully, proceeding with request" }
                 evaluatorMutation?.invoke(req)
                 result
             }
 
             is CapabilityResult.RetryRequest -> {
-                Log.i { "Retrying the request" }
+                Log.d { "Retrying the request" }
                 result.mutate(req)
                 result
             }
 
             is CapabilityResult.Error -> {
-                Log.e { "Flow execution failed: [${result.internalCode}] ${result.internalMessage}}" }
+                Log.e { "Flow execution failed: [${result.internalCode}] ${result.internalMessage.take(200)}}" }
                 result
             }
         }

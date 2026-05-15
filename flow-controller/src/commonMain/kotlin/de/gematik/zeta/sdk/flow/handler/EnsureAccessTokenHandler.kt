@@ -32,6 +32,8 @@ import de.gematik.zeta.sdk.authentication.AccessTokenProvider
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.authentication.AuthenticationException
 import de.gematik.zeta.sdk.authentication.HttpAuthHeaders
+import de.gematik.zeta.sdk.authentication.InvalidClientException
+import de.gematik.zeta.sdk.authentication.RecoverableAuthenticationException
 import de.gematik.zeta.sdk.flow.CapabilityHandler
 import de.gematik.zeta.sdk.flow.CapabilityResult
 import de.gematik.zeta.sdk.flow.FlowContext
@@ -52,6 +54,7 @@ class EnsureAccessTokenHandler(
     val productId: String,
     val productVersion: String,
     val platformProductId: PlatformProductId,
+    val clientRegistrationHandler: ClientRegistrationHandler? = null,
 ) : CapabilityHandler {
     companion object {
         private const val AUTHENTICATION_ERROR_CODE = "AUTHENTICATION_ERROR"
@@ -61,29 +64,116 @@ class EnsureAccessTokenHandler(
 
     override suspend fun handle(need: FlowNeed, ctx: FlowContext): CapabilityResult {
         val start = TimeSource.Monotonic.markNow()
-        return try {
-            return CapabilityResult.RetryRequest { req ->
-                if (!req.headers.contains(HttpHeaders.Authorization)) {
-                    val dpopKey = tpmProvider.generateDpopKey()
+        val firstResult = fetchToken(ctx)
 
-                    val (authToken, authTokenTime) = measureTimedValue { getAuthToken(ctx, dpopKey.jwk.kid) }
-                    Log.i { "[ENSURE-AUTH-TIMING] getAuthToken=$authTokenTime" }
+        return when {
+            firstResult.isSuccess ->
+                buildRetryRequest(firstResult.getOrThrow(), start)
 
-                    val (hashedToken, hashTime) = measureTimedValue { tokenProvider.hash(authToken) }
-                    Log.i { "[ENSURE-AUTH-TIMING] hashToken=$hashTime" }
-
-                    val dpop = tokenProvider.createDpopToken(dpopKey.jwk, req.method.value, req.url.toString(), null, hashedToken)
-
-                    req.headers[HttpHeaders.Authorization] = "${HttpAuthHeaders.Dpop} $authToken"
-                    req.headers[HttpAuthHeaders.Dpop] = dpop
-                }
-                Log.i { "[ENSURE-AUTH-TIMING] handle total=${start.elapsedNow()}" }
+            firstResult.isUnauthorized() -> {
+                Log.w { "Token request got 401: step up" }
+                stepUp(ctx, firstResult.isInvalidClient(), start)
             }
-        } catch (e: AuthenticationException) {
-            Log.e { "[ENSURE-AUTH-TIMING] handle FAILED in ${start.elapsedNow()}: ${e.message}" }
-            CapabilityResult.Error(AUTHENTICATION_ERROR_CODE, e.message.toString(), e.response)
+
+            else -> {
+                val ex = firstResult.exceptionOrNull() as AuthenticationException
+                Log.e { "Token request failed: ${ex.message}" }
+                CapabilityResult.Error(AUTHENTICATION_ERROR_CODE, ex.message.toString(), ex.response)
+            }
         }
     }
+
+    @Suppress("InstanceOfCheckForException")
+    suspend fun getValidAccessTokenWithStepUp(ctx: FlowContext): AccessTokenWithDpopKey {
+        return try {
+            getValidAccessToken(ctx)
+        } catch (e: RecoverableAuthenticationException) {
+            Log.w { "WS auth got 401, stepping up" }
+            val start = TimeSource.Monotonic.markNow()
+            val result = stepUp(ctx, e is InvalidClientException, start)
+            if (result is CapabilityResult.RetryRequest) {
+                getValidAccessToken(ctx)
+            } else {
+                throw e
+            }
+        }
+    }
+
+    private suspend fun stepUp(
+        ctx: FlowContext,
+        invalidClient: Boolean,
+        start: TimeSource.Monotonic.ValueTimeMark,
+    ): CapabilityResult {
+        ctx.authenticationStorage.clear()
+        if (invalidClient && clientRegistrationHandler != null) {
+            ctx.clientRegistrationStorage.clear()
+            clientRegistrationHandler.handle(FlowNeed.ClientRegistration, ctx)
+        } else if (invalidClient) {
+            Log.w { "invalid_client but no clientRegistrationHandler available - skipping re-registration" }
+        }
+
+        val retryResult = fetchToken(ctx)
+
+        return when {
+            retryResult.isSuccess -> {
+                Log.i { "Step-up succeeded" }
+                buildRetryRequest(retryResult.getOrThrow(), start)
+            }
+            else -> {
+                val ex = retryResult.exceptionOrNull() as AuthenticationException
+                Log.e { "Step-up failed: ${ex.message}" }
+                CapabilityResult.Error(AUTHENTICATION_ERROR_CODE, ex.message.toString(), ex.response)
+            }
+        }
+    }
+
+    private suspend fun fetchToken(ctx: FlowContext): Result<TokenWithDpop> {
+        return try {
+            val dpopKey = tpmProvider.generateDpopKey(ctx.resource)
+            val (authToken, tokenTime) = measureTimedValue { getAuthToken(ctx, dpopKey.jwk.kid) }
+            Log.i { "[ENSURE-AUTH-TIMING] getAuthToken=$tokenTime" }
+
+            val (hashedToken, hashTime) = measureTimedValue { tokenProvider.hash(authToken) }
+            Log.i { "[ENSURE-AUTH-TIMING] hashToken=$hashTime" }
+
+            Result.success(TokenWithDpop(authToken, hashedToken, dpopKey))
+        } catch (e: AuthenticationException) {
+            Result.failure(e)
+        }
+    }
+
+    private fun buildRetryRequest(
+        token: TokenWithDpop,
+        start: TimeSource.Monotonic.ValueTimeMark,
+    ): CapabilityResult = CapabilityResult.RetryRequest { req ->
+        req.headers.remove(HttpHeaders.Authorization)
+        req.headers.remove(HttpAuthHeaders.Dpop)
+
+        val dpop = tokenProvider.createDpopToken(
+            token.dpopKey.jwk,
+            req.method.value,
+            req.url.toString(),
+            null,
+            token.hashedToken,
+        )
+
+        req.headers[HttpHeaders.Authorization] = "${HttpAuthHeaders.Dpop} ${token.authToken}"
+        req.headers[HttpAuthHeaders.Dpop] = dpop
+
+        Log.i { "[ENSURE-AUTH-TIMING] handle total=${start.elapsedNow()}" }
+    }
+
+    private data class TokenWithDpop(
+        val authToken: String,
+        val hashedToken: String,
+        val dpopKey: PublicKeyOut,
+    )
+
+    private fun Result<*>.isUnauthorized(): Boolean =
+        exceptionOrNull() is RecoverableAuthenticationException
+
+    private fun Result<*>.isInvalidClient(): Boolean =
+        exceptionOrNull() is InvalidClientException
 
     suspend fun getAuthToken(ctx: FlowContext, dpopKey: String): String {
         val start = TimeSource.Monotonic.markNow()
@@ -109,25 +199,23 @@ class EnsureAccessTokenHandler(
                 "Missing auth server configuration for resource: ${ctx.resource}"
             }
         }
-        val tokenEndpoint = requireNotNull(authServer.tokenEndpoint) {
+        val tokenEndpoint = requireNotBlank(authServer.tokenEndpoint) {
             "Missing token endpoint for resource: ${ctx.resource}"
         }
-        val nonceEndpoint = requireNotNull(authServer.nonceEndpoint) {
+        val nonceEndpoint = requireNotBlank(authServer.nonceEndpoint) {
             "Missing nonce endpoint for resource: ${ctx.resource}"
         }
         val (clientId, clientIdTime) = measureTimedValue {
-            requireNotNull(ctx.clientRegistrationStorage.getClientId(authServer.issuer)) {
+            requireNotBlank(ctx.clientRegistrationStorage.getClientId(authServer.issuer)) {
                 "Missing client_id for resource ${ctx.resource}"
             }
         }
-        val issuer = requireNotNull(ctx.configurationStorage.getAuthServer(ctx.resource)?.issuer) {
+        val issuer = requireNotBlank(ctx.configurationStorage.getAuthServer(ctx.resource)?.issuer) {
             "Missing issuer for resource: $ctx.resource"
         }
-        val scopes = authConfig.scopes.ifEmpty {
-            requireNotNull(authServer.scopesSupported) {
-                "Missing scopes supported for resource: ${ctx.resource}"
-            }
-        }
+
+        val scopes = authConfig.scopes.ifEmpty { authServer.scopesSupported }
+
         Log.i { "[ENSURE-AUTH-TIMING] buildParams authServerRead=$authServerTime clientIdRead=$clientIdTime total=${start.elapsedNow()}" }
 
         return AccessTokenParamsWithEndpoints(
@@ -145,6 +233,12 @@ class EnsureAccessTokenHandler(
         )
     }
 
+    private fun requireNotBlank(value: String?, lazyMessage: () -> String): String {
+        val v = requireNotNull(value, lazyMessage)
+        require(v.isNotBlank(), lazyMessage)
+        return v
+    }
+
     private data class AccessTokenParamsWithEndpoints(
         val tokenEndpoint: String,
         val nonceEndpoint: String,
@@ -155,7 +249,7 @@ class EnsureAccessTokenHandler(
 
     /** Helper you can call from ws() to get a valid access token */
     suspend fun getValidAccessToken(ctx: FlowContext): AccessTokenWithDpopKey {
-        val dpopKey = tpmProvider.generateDpopKey()
+        val dpopKey = tpmProvider.generateDpopKey(ctx.resource)
         val token = getAuthToken(ctx, dpopKey.jwk.kid)
         return AccessTokenWithDpopKey(token, dpopKey)
     }

@@ -60,11 +60,9 @@ class ZetaCipherSuitesTest {
         val suites = ZetaCipherSuites.REQUIRED_TLS_1_2
 
         // Assert
-        assertEquals(4, suites.size)
+        assertEquals(2, suites.size)
         assertTrue(ZetaCipherSuites.ECDHE_ECDSA_AES128_GCM_SHA256 in suites)
         assertTrue(ZetaCipherSuites.ECDHE_ECDSA_AES256_GCM_SHA384 in suites)
-        assertTrue(ZetaCipherSuites.ECDHE_RSA_AES128_GCM_SHA256 in suites)
-        assertTrue(ZetaCipherSuites.ECDHE_RSA_AES256_GCM_SHA384 in suites)
     }
 
     @Test
@@ -79,12 +77,12 @@ class ZetaCipherSuitesTest {
     }
 
     @Test
-    fun FULL_PREFERRED_ORDER_combinesTls12AndTls13_sizeIsSix() {
+    fun FULL_PREFERRED_ORDER_combinesTls12AndTls13() {
         // Arrange & Act
         val suites = ZetaCipherSuites.FULL_PREFERRED_ORDER
 
         // Assert
-        assertEquals(6, suites.size)
+        assertEquals(4, suites.size)
         assertEquals(ZetaCipherSuites.REQUIRED_TLS_1_2 + ZetaCipherSuites.TLS_1_3_SUITES, suites)
     }
 
@@ -94,11 +92,9 @@ class ZetaCipherSuitesTest {
         val iana = ZetaCipherSuites.FULL_PREFERRED_ORDER_IANA
 
         // Assert
-        assertEquals(6, iana.size)
+        assertEquals(4, iana.size)
         assertTrue("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" in iana)
         assertTrue("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384" in iana)
-        assertTrue("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256" in iana)
-        assertTrue("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384" in iana)
         assertTrue("TLS_AES_128_GCM_SHA256" in iana)
         assertTrue("TLS_AES_256_GCM_SHA384" in iana)
     }

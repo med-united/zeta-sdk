@@ -24,9 +24,9 @@
 
 package de.gematik.zeta.sdk.authentication
 
-import AttestationApi
 import Jwk
 import PublicKeyOut
+import de.gematik.zeta.sdk.attestation.AttestationApi
 import de.gematik.zeta.sdk.attestation.model.AttestationConfig
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.model.AccessTokenRequest
@@ -50,6 +50,8 @@ import kotlin.test.assertTrue
 import kotlin.uuid.Uuid
 
 class AccessTokenProviderImplTest {
+    private val requiredOid = "1.2.276.0.76.4.261"
+
     @Test
     fun getValidToken_returnsCachedToken_whenValidAndNotExpired() = runTest {
         // Arrange
@@ -271,7 +273,7 @@ class AccessTokenProviderImplTest {
                 y = "fake-y",
             ),
         )
-        override suspend fun generateDpopKey(): PublicKeyOut = PublicKeyOut(
+        override suspend fun generateDpopKey(resource: String): PublicKeyOut = PublicKeyOut(
             encoded = ByteArray(32) { 0x01 },
             jwk = Jwk(
                 kid = "fake-kid",
@@ -284,17 +286,17 @@ class AccessTokenProviderImplTest {
             ),
         )
         override suspend fun signWithClientKey(input: ByteArray): ByteArray = ByteArray(64) { 0x02 }
-        override suspend fun signWithDpopKey(input: ByteArray): ByteArray = ByteArray(64) { 0x03 }
+        override suspend fun signWithDpopKey(input: ByteArray, resource: String): ByteArray = ByteArray(64) { 0x03 }
         override suspend fun readSmbCertificate(p12File: String, alias: String, password: String): ByteArray = ByteArray(0)
         override suspend fun readSmbCertificateFromBytes(data: ByteArray, alias: String, password: String): ByteArray = ByteArray(0)
         override suspend fun signWithSmbKey(input: ByteArray, p12File: String, alias: String, password: String): ByteArray = ByteArray(0)
         override suspend fun signWithSmbKeyFromBytes(input: ByteArray, keystoreBytes: ByteArray, alias: String, password: String): ByteArray {
-            TODO("Not yet implemented")
+            error("not in scope of the test")
         }
 
         override suspend fun randomUuid(): Uuid = Uuid.parse("00000000-0000-0000-0000-000000000001")
         override suspend fun getRegistrationNumber(certificate: ByteArray): String = "fake-reg-number"
-        override fun forget() {}
+        override suspend fun forget(resource: String?) {}
     }
 
     private class FakeAttestationApi : AttestationApi {
@@ -390,23 +392,23 @@ class AccessTokenProviderImplTest {
 
     private fun fakeHttpResponse(): HttpResponse = object : HttpResponse() {
         override val call: HttpClientCall
-            get() = TODO("Not yet implemented")
+            get() = error("not in scope of the test")
         override val status: HttpStatusCode
-            get() = TODO("Not yet implemented")
+            get() = error("not in scope of the test")
         override val version: HttpProtocolVersion
-            get() = TODO("Not yet implemented")
+            get() = error("not in scope of the test")
         override val requestTime: GMTDate
-            get() = TODO("Not yet implemented")
+            get() = error("not in scope of the test")
         override val responseTime: GMTDate
-            get() = TODO("Not yet implemented")
+            get() = error("not in scope of the test")
 
         @InternalAPI
         override val rawContent: ByteReadChannel
-            get() = TODO("Not yet implemented")
+            get() = error("not in scope of the test")
         override val headers: Headers
-            get() = TODO("Not yet implemented")
+            get() = error("not in scope of the test")
         override val coroutineContext: CoroutineContext
-            get() = TODO("Not yet implemented")
+            get() = error("not in scope of the test")
     }
 
     private fun buildAuthConfig() = AuthConfig(
@@ -414,6 +416,7 @@ class AccessTokenProviderImplTest {
         exp = 300L,
         subjectTokenProvider = FakeSubjectTokenProvider(),
         attestation = AttestationConfig.software(),
+        requiredRoleOid = requiredOid,
     )
 
     private fun buildSut(

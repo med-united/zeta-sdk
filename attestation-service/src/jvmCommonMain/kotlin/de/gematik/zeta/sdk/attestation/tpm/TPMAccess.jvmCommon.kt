@@ -24,19 +24,19 @@
 
 package de.gematik.zeta.sdk.attestation.tpm
 
+import de.gematik.zeta.sdk.attestation.interfaces.FileHashCalculator.NOT_IN_SCOPE_TARGET
 import de.gematik.zeta.sdk.attestation.model.TpmQuoteResult
 
 actual class TpmAccess actual constructor() {
-    private val IMPLEMENT_PENDING = "PENDING IMPL."
     actual fun generateQuote(
         attChallengeBytes: ByteArray,
         pcrSelection: List<Int>,
     ): TpmQuoteResult {
-        TODO(IMPLEMENT_PENDING)
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun readPCRs(pcrSelection: List<Int>): Map<Int, ByteArray> {
-        TODO(IMPLEMENT_PENDING)
+        error(NOT_IN_SCOPE_TARGET)
     }
 
     actual fun isAvailable(): Boolean {
@@ -44,16 +44,18 @@ actual class TpmAccess actual constructor() {
     }
 
     actual fun extendPCR(pcrIndex: Int, data: ByteArray) {
-        TODO(IMPLEMENT_PENDING)
+        error(NOT_IN_SCOPE_TARGET)
     }
 
-    actual fun resetPCR(pcrIndex: Int) {}
+    actual fun resetPCR(pcrIndex: Int) {
+        error(NOT_IN_SCOPE_TARGET)
+    }
 
     actual fun removeAttestationKey() {
-        TODO(IMPLEMENT_PENDING)
+        error(NOT_IN_SCOPE_TARGET)
     }
 
-    actual fun getEventLog(): ByteArray = byteArrayOf(0)
-    actual fun getEKCertificateChain(): List<ByteArray> = emptyList()
-    actual fun provisionAttestationKey(): ByteArray = byteArrayOf(0)
+    actual fun getEventLog(): ByteArray = error(NOT_IN_SCOPE_TARGET)
+    actual fun getEKCertificateChain(): List<ByteArray> = error(NOT_IN_SCOPE_TARGET)
+    actual fun provisionAttestationKey(): ByteArray = error(NOT_IN_SCOPE_TARGET)
 }

@@ -27,7 +27,7 @@ package de.gematik.zeta.client.data.repository
 import de.gematik.zeta.client.data.service.HelloZetaService
 import de.gematik.zeta.client.data.service.HelloZetaServiceImpl
 
-public interface HelloZetaRepository {
+public fun interface HelloZetaRepository {
     public suspend fun helloZeta(): String
 }
 
