@@ -37,7 +37,6 @@ import de.gematik.zeta.sdk.crypto.openssl.ERR_get_error
 import de.gematik.zeta.sdk.crypto.openssl.EVP_PKEY
 import de.gematik.zeta.sdk.crypto.openssl.EVP_PKEY2PKCS8
 import de.gematik.zeta.sdk.crypto.openssl.EVP_PKEY_free
-import de.gematik.zeta.sdk.crypto.openssl.OBJ_obj2txt
 import de.gematik.zeta.sdk.crypto.openssl.OBJ_txt2obj
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_free
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_num
@@ -72,7 +71,7 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.readBytes // NOSONAR false positive - is required
+import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.refTo
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.toKString
@@ -155,99 +154,113 @@ actual class X509PemReader {
         val ptrVar = alloc<CPointerVar<UByteVar>>()
         certificateBytes.asUByteArray().usePinned { ptrVar.value = it.addressOf(0) }
         val cert = d2i_X509(null, ptrVar.ptr, certificateBytes.size.convert())
-        if (cert == null) throw IOException("d2i_X509: certPtr == $cert, ${getOpenSSLErrors()}")
+            ?: throw IOException("d2i_X509: cert is null, ${getOpenSSLErrors()}")
 
         val extOid = OBJ_txt2obj("1.3.36.8.3.3", 1)
-        if (extOid == null) throw IOException("OBJ_txt2obj: extOid == $extOid")
+            ?: throw IOException("OBJ_txt2obj: extOid is null")
 
         val extIndex = X509_get_ext_by_OBJ(cert, extOid, -1)
-        if (extIndex < 0) throw IOException("X509_get_ext_by_OBJ: extIndex == $extIndex")
+        if (extIndex < 0) return null // Extension not found
 
         val ext = X509_get_ext(cert, extIndex)
-        if (ext == null) throw IOException("X509_get_ext: ext == $ext")
+            ?: throw IOException("X509_get_ext: ext is null")
 
         val octet = X509_EXTENSION_get_data(ext)
-        if (octet == null) throw IOException("X509_EXTENSION_get_data: octet == $octet")
+            ?: throw IOException("X509_EXTENSION_get_data: octet is null")
 
         val der = ASN1_STRING_get0_data(octet)
-        if (der == null) throw IOException("ASN1_STRING_get0_data: der == $der")
+            ?: throw IOException("ASN1_STRING_get0_data: der is null")
 
         val len = ASN1_STRING_length(octet)
-        if (len <= 0) throw IOException("ASN1_STRING_length: len == $len")
+        if (len <= 0) return null
 
-        val pDer = alloc<CPointerVar<UByteVar>>()
-        pDer.value = der
-
+        val pDer = alloc<CPointerVar<UByteVar>> { value = der }
         val asn1 = d2i_ASN1_TYPE(null, pDer.ptr, len.convert())
+            ?: throw IOException("d2i_ASN1_TYPE: asn1 is null")
 
-        val seqString = asn1!!.pointed.value.asn1_string
+        val seqString = asn1.pointed.value.asn1_string
         val derPtr = ASN1_STRING_get0_data(seqString)
         val plen = ASN1_STRING_length(seqString)
 
-        val ppDer = alloc<CPointerVar<UByteVar>>()
-        ppDer.value = derPtr
-
+        val ppDer = alloc<CPointerVar<UByteVar>> { value = derPtr }
         val childSeq = d2i_ASN1_SEQUENCE_ANY(null, ppDer.ptr, plen.convert())
-        findRegistrationNumber(childSeq, null, "1.2.276.0.76.4.50")
+
+        val result = findRegistrationNumberInSequence(childSeq)
+
+        ASN1_TYPE_free(asn1)
+        childSeq?.let { freeSequence(it) }
+
+        result
     }
 
-    fun findRegistrationNumber(
-        seq: CPointer<cnames.structs.stack_st_ASN1_TYPE>?,
-        parent: CPointer<cnames.structs.stack_st_ASN1_TYPE>?,
-        targetOid: String,
-    ): String? {
+    private fun findRegistrationNumberInSequence(seq: CPointer<cnames.structs.stack_st_ASN1_TYPE>?): String? {
         if (seq == null) return null
+
         for (i in 0 until asn1TypeNum(seq)) {
             val node = asn1TypeValue(seq, i) ?: continue
-            val result = when (node.pointed.type) {
-                V_ASN1_OBJECT -> handleOidNode(node, parent, targetOid)
-                V_ASN1_SEQUENCE -> handleSequenceNode(node, seq, targetOid)
-                else -> null
+
+            if (node.pointed.type == V_ASN1_PRINTABLESTRING) {
+                // Found a PrintableString. Now, validate its context.
+                if (isProfessionInfoContext(seq)) {
+                    val ps = node.pointed.value.printablestring ?: continue
+                    val data = ASN1_STRING_get0_data(ps) ?: continue
+                    return data.readBytes(ASN1_STRING_length(ps)).toKString()
+                }
+            } else if (node.pointed.type == V_ASN1_SEQUENCE) {
+                // It's a sequence, so recurse into it.
+                val seqString = node.pointed.value.asn1_string ?: continue
+                val derPtr = ASN1_STRING_get0_data(seqString)?.reinterpret<UByteVar>() ?: continue
+                val result = memScoped {
+                    val pDer = alloc<CPointerVar<UByteVar>> { value = derPtr }
+                    val childSeq = d2i_ASN1_SEQUENCE_ANY(null, pDer.ptr, ASN1_STRING_length(seqString).convert())
+                    val found = findRegistrationNumberInSequence(childSeq)
+                    childSeq?.let { freeSequence(it) }
+                    found
+                }
+                if (result != null) return result
             }
-            if (result != null) return result
         }
         return null
     }
 
-    private fun handleOidNode(
-        node: CPointer<ASN1_TYPE>,
-        parent: CPointer<cnames.structs.stack_st_ASN1_TYPE>?,
-        targetOid: String,
-    ): String? {
-        val obj = node.pointed.value.`object` ?: return null
-        val buf = ByteArray(128)
-        OBJ_obj2txt(buf.refTo(0), buf.size.convert(), obj, 1)
-        if (buf.toKString() != targetOid) return null
-        return parent?.let { findPrintableString(it) }
+    /**
+     * Checks if a given sequence is likely a `ProfessionInfo` block.
+     * It does this by checking if one of its direct children is a sequence that contains an OBJECT IDENTIFIER (the role OID).
+     */
+    private fun isProfessionInfoContext(professionInfoSeq: CPointer<cnames.structs.stack_st_ASN1_TYPE>?): Boolean {
+        if (professionInfoSeq == null) return false
+
+        for (i in 0 until asn1TypeNum(professionInfoSeq)) {
+            val node = asn1TypeValue(professionInfoSeq, i) ?: continue
+            if (node.pointed.type == V_ASN1_SEQUENCE) {
+                // Found a child sequence. Check if it contains an OID.
+                val seqString = node.pointed.value.asn1_string ?: continue
+                val derPtr = ASN1_STRING_get0_data(seqString)?.reinterpret<UByteVar>() ?: continue
+                val hasOid = memScoped {
+                    val pDer = alloc<CPointerVar<UByteVar>> { value = derPtr }
+                    val childSeq = d2i_ASN1_SEQUENCE_ANY(null, pDer.ptr, ASN1_STRING_length(seqString).convert())
+                    val found = containsObjectType(childSeq)
+                    childSeq?.let { freeSequence(it) }
+                    found
+                }
+                if (hasOid) return true
+            }
+        }
+        return false
     }
 
-    private fun findPrintableString(parent: CPointer<cnames.structs.stack_st_ASN1_TYPE>): String? {
-        for (j in 0 until asn1TypeNum(parent)) {
-            val pnode = asn1TypeValue(parent, j) ?: continue
-            if (pnode.pointed.type != V_ASN1_PRINTABLESTRING) continue
-            val ps = pnode.pointed.value.printablestring ?: continue
-            val data = ASN1_STRING_get0_data(ps) ?: continue
-            return data.readBytes(ASN1_STRING_length(ps)).toKString()
+    /**
+     * Helper to check if a sequence contains a node of type V_ASN1_OBJECT.
+     */
+    private fun containsObjectType(seq: CPointer<cnames.structs.stack_st_ASN1_TYPE>?): Boolean {
+        if (seq == null) return false
+        for (i in 0 until asn1TypeNum(seq)) {
+            val node = asn1TypeValue(seq, i) ?: continue
+            if (node.pointed.type == V_ASN1_OBJECT) {
+                return true
+            }
         }
-        return null
-    }
-
-    private fun handleSequenceNode(
-        node: CPointer<ASN1_TYPE>,
-        parent: CPointer<cnames.structs.stack_st_ASN1_TYPE>,
-        targetOid: String,
-    ): String? {
-        val seqString = node.pointed.value.asn1_string ?: return null
-        val derPtr = ASN1_STRING_get0_data(seqString)?.reinterpret<UByteVar>() ?: return null
-        return memScoped {
-            val pDer = alloc<CPointerVar<UByteVar>>()
-            pDer.value = derPtr
-            val childSeq = d2i_ASN1_SEQUENCE_ANY(null, pDer.ptr, ASN1_STRING_length(seqString).convert())
-                ?: return@memScoped null
-            val found = findRegistrationNumber(childSeq, parent, targetOid)
-            freeSequence(childSeq)
-            found
-        }
+        return false
     }
 
     private fun freeSequence(seq: CPointer<cnames.structs.stack_st_ASN1_TYPE>) {
