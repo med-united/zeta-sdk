@@ -118,7 +118,7 @@ class SmcbTokenProvider(
 
     private suspend fun signSmcbToken(token: String): String {
         val digest = hashWithSha256(token.toByteArray())
-        val challenge = Base64.withPadding(Base64.PaddingOption.ABSENT).encode(digest)
+        val challenge = Base64.encode(digest)
         val signature = derEcdsaToJose(signSmcbTokenHash(challenge), 32)
         return Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).encode(signature)
     }

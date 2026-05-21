@@ -53,19 +53,19 @@ data class ReadCardCertificate(
 @Serializable
 data class Context(
     @XmlElement(true)
-    @XmlSerialName("MandantId", namespace = CCTX_NS, prefix = "CCTX")
+    @XmlSerialName("MandantId", namespace = CONN_NS, prefix = "CONN")
     val mandantId: String,
 
     @XmlElement(true)
-    @XmlSerialName("ClientSystemId", namespace = CCTX_NS, prefix = "CCTX")
+    @XmlSerialName("ClientSystemId", namespace = CONN_NS, prefix = "CONN")
     val clientSystemId: String?,
 
     @XmlElement(true)
-    @XmlSerialName("WorkplaceId", namespace = CCTX_NS, prefix = "CCTX")
+    @XmlSerialName("WorkplaceId", namespace = CONN_NS, prefix = "CONN")
     val workplaceId: String?,
 
     @XmlElement(true)
-    @XmlSerialName("MandantId", namespace = CCTX_NS, prefix = "CCTX")
+    @XmlSerialName("UserId", namespace = CONN_NS, prefix = "CONN")
     val userId: String?,
 )
 

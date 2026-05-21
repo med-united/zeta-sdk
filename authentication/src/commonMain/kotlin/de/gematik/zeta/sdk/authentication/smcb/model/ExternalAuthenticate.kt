@@ -27,6 +27,7 @@ package de.gematik.zeta.sdk.authentication.smcb.model
 import kotlinx.serialization.Serializable
 import nl.adaptivity.xmlutil.serialization.XmlElement
 import nl.adaptivity.xmlutil.serialization.XmlSerialName
+import nl.adaptivity.xmlutil.serialization.XmlValue
 
 const val SIG_NS = "http://ws.gematik.de/conn/SignatureService/v7.4"
 const val DSS_NS = "urn:oasis:names:tc:dss:1.0:core:schema"
@@ -58,9 +59,19 @@ data class OptionalInputs(
     val signatureType: String? = null,
 )
 
+
 @Serializable
 data class BinaryString(
     @XmlElement(true)
     @XmlSerialName("Base64Data", namespace = DSS_NS, prefix = "dss")
-    val base64Data: String,
+    val base64Data: Base64Data,
+)
+
+@Serializable
+data class Base64Data(
+    @XmlValue
+    val value: String,
+
+    @XmlSerialName("MimeType")
+    val mimeType: String = "application/octet-stream",
 )
