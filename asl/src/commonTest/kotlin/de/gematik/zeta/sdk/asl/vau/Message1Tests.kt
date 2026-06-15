@@ -24,11 +24,31 @@
 
 package de.gematik.zeta.sdk.asl.vau
 
+import de.gematik.zeta.sdk.asl.AslApiImplTest
+import de.gematik.zeta.sdk.asl.AslHandshakeState
+import de.gematik.zeta.sdk.asl.AslHandshakeStateTest
+import de.gematik.zeta.sdk.authentication.AccessTokenProvider
+import de.gematik.zeta.sdk.authentication.HttpAuthHeaders
+import de.gematik.zeta.sdk.crypto.EcdhP256Kem
 import de.gematik.zeta.sdk.crypto.Kem
 import de.gematik.zeta.sdk.crypto.KemEncapResult
 import de.gematik.zeta.sdk.crypto.KeyPair
+import de.gematik.zeta.sdk.crypto.ML768Kem
+import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
+import de.gematik.zeta.sdk.network.http.client.ZetaHttpResponse
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.request.HttpRequestBuilder
+import io.ktor.client.request.get
+import io.ktor.client.request.url
+import io.ktor.http.ContentType
+import io.ktor.http.Headers
 import io.ktor.http.HeadersBuilder
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -275,6 +295,122 @@ class Message1Test {
         assertFailsWith<IllegalArgumentException> {
             sec1ToXY(sec1)
         }
+    }
+
+    @Test
+    fun processMessage1Response_returnsCidResponseAndTranscript() = runTest {
+        val messageEncoded = byteArrayOf(1, 2, 3)
+        val bodyBytes = byteArrayOf(4, 5, 6)
+
+        val engine = MockEngine {
+            respond(
+                content = bodyBytes,
+                status = HttpStatusCode.OK,
+                headers = headersOf(
+                    HttpHeaders.ContentType to listOf(ContentType.Application.Cbor.toString()),
+                    "zeta-asl-cid" to listOf("/cid-123"),
+                ),
+            )
+        }
+
+        val client = HttpClient(engine)
+        val raw = client.get("https://example.com")
+        val response = ZetaHttpResponse(
+            status = HttpStatusCode.OK,
+            raw = raw,
+            headers = emptyMap(),
+        )
+
+        val result = processMessage1Response(response, messageEncoded)
+
+        assertEquals("/cid-123", result.cid)
+        assertContentEquals(bodyBytes, result.response)
+        assertContentEquals(messageEncoded + bodyBytes, result.transcript)
+    }
+
+    @Test
+    fun processMessage1Response_throws_whenCidHeaderMissing() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = byteArrayOf(4, 5, 6),
+                status = HttpStatusCode.OK,
+                headers = Headers.Empty,
+            )
+        }
+
+        val client = HttpClient(engine)
+        val raw = client.get("https://example.com")
+        val response = ZetaHttpResponse(
+            status = HttpStatusCode.OK,
+            raw = raw,
+            headers = emptyMap(),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            processMessage1Response(response, byteArrayOf(1, 2, 3))
+        }
+    }
+
+    @Test
+    fun sendMessage1_usesAslUrl_forRequestUrl() = runTest {
+        var capturedUrl: String? = null
+
+        val engine = MockEngine { request ->
+            capturedUrl = request.url.toString()
+
+            respond(
+                content = byteArrayOf(),
+                status = HttpStatusCode.OK,
+                headers = headersOf(
+                    HttpHeaders.ContentType to listOf(ContentType.Application.Cbor.toString()),
+                    "zeta-asl-cid" to listOf("/cid-123"),
+                ),
+            )
+        }
+
+        val httpClient = ZetaHttpClient(HttpClient(engine))
+
+        val request = HttpRequestBuilder().apply {
+            url("https://example.com/some/path")
+            headers.append(HttpHeaders.Authorization, "${HttpAuthHeaders.Dpop} token")
+        }
+
+        val state = buildState(
+            request = request,
+            httpClient = httpClient,
+            accessTokenProvider = AslApiImplTest.FakeAccessTokenProvider(),
+        )
+
+        sendMessage1(
+            request = request,
+            messageEncoded = byteArrayOf(1),
+            httpClient = httpClient,
+            state = state,
+        )
+
+        assertEquals("https://example.com/ASL", capturedUrl)
+    }
+
+    private fun buildState(
+        request: HttpRequestBuilder,
+        httpClient: ZetaHttpClient,
+        accessTokenProvider: AccessTokenProvider,
+    ): AslHandshakeState {
+        return AslHandshakeState(
+            request = request,
+            httpClient = httpClient,
+            mlKem = ML768Kem(),
+            ecdhKem = EcdhP256Kem(),
+            message1 = null,
+            message1Result = null,
+            m3Result = null,
+            m3Encoded = null,
+            transcriptHash = null,
+            message4 = null,
+            accessTokenProvider = accessTokenProvider,
+            tpmProvider = AslHandshakeStateTest.FakeTpmProvider(false),
+            resource = "",
+        )
     }
 
     private class FakeKem(

@@ -33,7 +33,7 @@ class SecureSdkStorage(
         if (secrets != null && isSensitive(key)) secrets.put(key, value) else settings.putString(key, value)
     }
     override suspend fun get(key: String): String? =
-        if (secrets != null && isSensitive(key)) secrets.get(key) else settings.getString(key, "")
+        if (secrets != null && isSensitive(key)) secrets.get(key) else settings.getStringOrNull(key)
     override suspend fun remove(key: String) {
         if (secrets != null && isSensitive(key)) secrets.remove(key) else settings.remove(key)
     }

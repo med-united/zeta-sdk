@@ -25,13 +25,16 @@
 package de.gematik.zeta.sdk.crypto
 
 import de.gematik.zeta.logging.Log
-import de.gematik.zeta.sdk.crypto.openssl.ASN1_OBJECT
+import de.gematik.zeta.sdk.crypto.openssl.ASN1_STRING_get0_data
+import de.gematik.zeta.sdk.crypto.openssl.ASN1_STRING_length
 import de.gematik.zeta.sdk.crypto.openssl.ASN1_TIME
 import de.gematik.zeta.sdk.crypto.openssl.ASN1_TIME_compare
 import de.gematik.zeta.sdk.crypto.openssl.ASN1_TIME_set
 import de.gematik.zeta.sdk.crypto.openssl.EVP_PKEY_free
-import de.gematik.zeta.sdk.crypto.openssl.NID_ext_key_usage
-import de.gematik.zeta.sdk.crypto.openssl.OBJ_obj2txt
+import de.gematik.zeta.sdk.crypto.openssl.GENERAL_NAME
+import de.gematik.zeta.sdk.crypto.openssl.GEN_DNS
+import de.gematik.zeta.sdk.crypto.openssl.NID_subject_alt_name
+import de.gematik.zeta.sdk.crypto.openssl.OBJ_txt2obj
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_STACK
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_free
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_new_null
@@ -39,6 +42,7 @@ import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_num
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_push
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_value
 import de.gematik.zeta.sdk.crypto.openssl.X509
+import de.gematik.zeta.sdk.crypto.openssl.X509_EXTENSION_get_data
 import de.gematik.zeta.sdk.crypto.openssl.X509_STORE_CTX_free
 import de.gematik.zeta.sdk.crypto.openssl.X509_STORE_CTX_get_error
 import de.gematik.zeta.sdk.crypto.openssl.X509_STORE_CTX_init
@@ -49,6 +53,8 @@ import de.gematik.zeta.sdk.crypto.openssl.X509_STORE_new
 import de.gematik.zeta.sdk.crypto.openssl.X509_free
 import de.gematik.zeta.sdk.crypto.openssl.X509_get0_notAfter
 import de.gematik.zeta.sdk.crypto.openssl.X509_get0_notBefore
+import de.gematik.zeta.sdk.crypto.openssl.X509_get_ext
+import de.gematik.zeta.sdk.crypto.openssl.X509_get_ext_by_OBJ
 import de.gematik.zeta.sdk.crypto.openssl.X509_get_ext_d2i
 import de.gematik.zeta.sdk.crypto.openssl.X509_get_pubkey
 import de.gematik.zeta.sdk.crypto.openssl.X509_verify_cert
@@ -65,6 +71,7 @@ import kotlinx.cinterop.alloc
 import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.pointed
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.refTo
@@ -73,14 +80,17 @@ import kotlinx.cinterop.toKString
 import kotlinx.cinterop.value
 import platform.posix.time
 import platform.posix.time_t
+import kotlin.sequences.generateSequence
 
 @OptIn(ExperimentalForeignApi::class, UnsafeNumber::class)
 actual class X509CertValidator actual constructor() {
+    private val oidAdmission = "1.3.36.8.3.3"
+    val certificateParsingErrorMessage = "Failed to parse certificate"
     actual fun checkValidity(certDer: ByteArray) = memScoped {
         val pCert = alloc<CPointerVar<UByteVar>>()
         pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
         val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
-            ?: error("Failed to parse certificate")
+            ?: error(certificateParsingErrorMessage)
 
         try {
             val notBefore = X509_get0_notBefore(cert)
@@ -102,30 +112,36 @@ actual class X509CertValidator actual constructor() {
         }
     }
 
-    actual fun getExtendedKeyUsage(certDer: ByteArray): List<String> = memScoped {
+    actual fun getProfessionOids(certDer: ByteArray): List<String> = memScoped {
         val pCert = alloc<CPointerVar<UByteVar>>()
         pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
         val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
-            ?: error("Failed to parse certificate")
-
+            ?: error(certificateParsingErrorMessage)
         try {
-            val eku = X509_get_ext_d2i(cert, NID_ext_key_usage, null, null)
-                ?: return emptyList()
-
-            val stack = eku.reinterpret<OPENSSL_STACK>()
-            val num = OPENSSL_sk_num(stack)
-
-            buildList {
-                for (i in 0 until num) {
-                    val obj = OPENSSL_sk_value(stack, i)?.reinterpret<ASN1_OBJECT>()
-                        ?: continue
-
-                    val oidLen = OBJ_obj2txt(null, 0, obj, 1)
-                    if (oidLen > 0) {
-                        val oidBuffer = allocArray<ByteVar>(oidLen + 1)
-                        OBJ_obj2txt(oidBuffer, oidLen + 1, obj, 1)
-                        add(oidBuffer.toKString())
-                    }
+            val admissionObj = OBJ_txt2obj(oidAdmission, 1)
+                ?: run { Log.w { "getProfessionOids: failed to resolve OID $oidAdmission" }; return emptyList() }
+            val idx = X509_get_ext_by_OBJ(cert, admissionObj, -1)
+            if (idx < 0) {
+                Log.w { "getProfessionOids: admission extension ($oidAdmission) not found in certificate" }
+                return emptyList()
+            }
+            val ext = X509_get_ext(cert, idx)
+                ?: run { Log.w { "getProfessionOids: X509_get_ext returned null at idx: $idx" }; return emptyList() }
+            val octStr = X509_EXTENSION_get_data(ext)
+                ?: run { Log.w { "getProfessionOids: X509_EXTENSION_get_data returned null" }; return emptyList() }
+            val len = ASN1_STRING_length(octStr)
+            if (len <= 0) {
+                Log.w { "getProfessionOids: admission extension data is empty (len: $len)" }
+                return emptyList()
+            }
+            val data = ASN1_STRING_get0_data(octStr)
+                ?: run { Log.w { "getProfessionOids: ASN1_STRING_get0_data returned null" }; return emptyList() }
+            val derBytes = data.reinterpret<ByteVar>().readBytes(len)
+            parseAdmissionOids(derBytes).also { oids ->
+                if (oids.isEmpty()) {
+                    Log.w { "getProfessionOids: DER parsed successfully but no OIDs found (len: $len)" }
+                } else {
+                    Log.d { "getProfessionOids: found OIDs: $oids" }
                 }
             }
         } finally {
@@ -137,7 +153,7 @@ actual class X509CertValidator actual constructor() {
         val pCert = alloc<CPointerVar<UByteVar>>()
         pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
         val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
-            ?: error("Failed to parse certificate")
+            ?: error(certificateParsingErrorMessage)
 
         try {
             val pubKey = X509_get_pubkey(cert)
@@ -237,4 +253,143 @@ actual class X509CertValidator actual constructor() {
     private fun createAsn1Time(timeT: time_t): CPointer<ASN1_TIME>? {
         return ASN1_TIME_set(null, timeT)
     }
+
+    actual fun getSanDnsNames(certDer: ByteArray): List<String> = memScoped {
+        val pCert = alloc<CPointerVar<UByteVar>>()
+        pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
+        val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
+            ?: error(certificateParsingErrorMessage)
+
+        try {
+            val sanExt = X509_get_ext_d2i(cert, NID_subject_alt_name, null, null)
+                ?: return emptyList()
+
+            val stack = sanExt.reinterpret<OPENSSL_STACK>()
+            val num = OPENSSL_sk_num(stack)
+
+            buildList {
+                for (i in 0 until num) {
+                    val generalName = OPENSSL_sk_value(stack, i)
+                        ?.reinterpret<GENERAL_NAME>() ?: continue
+
+                    if (generalName.pointed.type == GEN_DNS) {
+                        val asn1Str = generalName.pointed.d.ia5 ?: continue
+                        val len = asn1Str.pointed.length
+                        val data = asn1Str.pointed.data ?: continue
+                        add(data.readBytes(len).decodeToString())
+                    }
+                }
+            }
+        } finally {
+            X509_free(cert)
+        }
+    }
+}
+
+private class DerReader(private val data: ByteArray, private var pos: Int = 0) {
+
+    val hasMore get() = pos < data.size
+
+    fun peekTag(): Int = data[pos].toInt() and 0xFF
+
+    private fun readTag(): Int = data[pos++].toInt() and 0xFF
+
+    private fun readLength(): Int {
+        val first = data[pos++].toInt() and 0xFF
+        return if (first < 0x80) {
+            first
+        } else {
+            val numBytes = first and 0x7F
+            var length = 0
+            repeat(numBytes) { length = (length shl 8) or (data[pos++].toInt() and 0xFF) }
+            length
+        }
+    }
+
+    fun readSeqContent(): ByteArray {
+        check(readTag() == 0x30) { "Expected SEQUENCE (0x30) at pos ${pos - 1}" }
+        val len = readLength()
+        return data.copyOfRange(pos, pos + len).also { pos += len }
+    }
+
+    fun skipOne() {
+        readTag()
+        pos += readLength()
+    }
+
+    fun readOid(): String {
+        check(readTag() == 0x06) { "Expected OID (0x06) at pos ${pos - 1}" }
+        val len = readLength()
+        return decodeOidBytes(data.copyOfRange(pos, pos + len)).also { pos += len }
+    }
+
+    /** Skip context-tagged elements and anything else until the first plain SEQUENCE. */
+    fun skipToFirstSeq(): ByteArray? {
+        while (hasMore) {
+            if (peekTag() == 0x30) return readSeqContent()
+            skipOne()
+        }
+        return null
+    }
+}
+
+private fun decodeOidBytes(bytes: ByteArray): String = buildString {
+    val first = bytes[0].toInt() and 0xFF
+    append(first / 40).append('.').append(first % 40)
+    var value = 0L
+    for (i in 1 until bytes.size) {
+        val b = bytes[i].toInt() and 0xFF
+        value = (value shl 7) or (b and 0x7F).toLong()
+        if (b and 0x80 == 0) {
+            append('.').append(value)
+            value = 0
+        }
+    }
+}
+private fun extractOidsFromProfInfo(der: ByteArray): List<String> {
+    val derOidTag = 0x06
+    val derSequenceTag = 0x30
+    val reader = DerReader(der)
+
+    val secondSeq = generateSequence {
+        if (reader.hasMore && reader.peekTag() == derSequenceTag) {
+            reader.readSeqContent()
+        } else { reader.skipOne(); null }
+    }
+        .drop(1)
+        .firstOrNull() ?: return emptyList()
+
+    val seqReader = DerReader(secondSeq)
+    return buildList {
+        while (seqReader.hasMore) {
+            if (seqReader.peekTag() == derOidTag) {
+                add(seqReader.readOid())
+            } else {
+                seqReader.skipOne()
+            }
+        }
+    }
+}
+
+internal fun parseAdmissionOids(der: ByteArray): List<String> = try {
+    val admSyntaxReader = DerReader(DerReader(der).readSeqContent())
+    val contentsBytes = admSyntaxReader.skipToFirstSeq() ?: return emptyList()
+    val contentsReader = DerReader(contentsBytes)
+
+    buildList {
+        while (contentsReader.hasMore) {
+            if (contentsReader.peekTag() != 0x30) { contentsReader.skipOne(); continue }
+
+            val admissionsReader = DerReader(contentsReader.readSeqContent())
+            val profInfosBytes = admissionsReader.skipToFirstSeq() ?: continue
+            val profInfosReader = DerReader(profInfosBytes)
+
+            while (profInfosReader.hasMore) {
+                if (profInfosReader.peekTag() != 0x30) { profInfosReader.skipOne(); continue }
+                addAll(extractOidsFromProfInfo(profInfosReader.readSeqContent()))
+            }
+        }
+    }
+} catch (_: Exception) {
+    emptyList()
 }

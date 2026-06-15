@@ -43,9 +43,7 @@ private class SoftwareCryptoProvider(
     private val x509PemReader: X509PemReader,
 ) : TpmProvider {
     override val isHardwareBacked: Boolean = false
-
     private var clientKey: KeyPair? = null
-    private var dpopKey: KeyPair? = null
 
     @Suppress("UnsafeCallOnNullableType")
     override suspend fun getOrGenerateClientInstancePublicKey(): PublicKeyOut {
@@ -72,22 +70,104 @@ private class SoftwareCryptoProvider(
         return PublicKeyOut(clientKey!!.skpi, jwk)
     }
 
-    private suspend fun loadClientKeysFromStorage(): KeyPair? {
-        val privRaw = storage.getClientPrivateKey()
-        val pubRaw = storage.getClientPublicKey()
+    override suspend fun generateDpopKey(resource: String): PublicKeyOut {
+        val existing = loadDpopKeysFromStorage(resource)
+        val key = if (existing != null) {
+            existing
+        } else {
+            val (generated, genTime) = measureTimedValue { keyPairGenerator.generateKeys() }
+            Log.d { "[CRYPTO-TIMING] generateDpopKeys($resource)=$genTime" }
+            val (_, saveTime) = measureTimedValue {
+                storage.saveDpopKeys(
+                    resource,
+                    toPem("PUBLIC KEY", generated.skpi),
+                    toPem("PRIVATE KEY", generated.privateKey),
+                )
+            }
+            Log.d { "[CRYPTO-TIMING] saveDpopKeys($resource)=$saveTime" }
+            generated
+        }
+        return PublicKeyOut(key.skpi, keyPairGenerator.toJwk(key.skpi))
+    }
 
-        if (privRaw == null || pubRaw == null) return null
+    @Suppress("UnsafeCallOnNullableType")
+    override suspend fun signWithClientKey(input: ByteArray): ByteArray {
+        checkNotNull(clientKey) { "Client key not initialized" }
+        val (result, signTime) = measureTimedValue { signForJws(clientKey!!.privateKey, input) }
+        Log.d { "[CRYPTO-TIMING] signWithClientKey=$signTime inputSize=${input.size}" }
+        return result
+    }
 
-        val privPem = decodeHexPem(privRaw)
-        val pubPem = decodeHexPem(pubRaw)
+    override suspend fun signWithDpopKey(input: ByteArray, resource: String): ByteArray {
+        val key = checkNotNull(loadDpopKeysFromStorage(resource)) {
+            "DPoP key not found for resource: $resource"
+        }
+        val (result, signTime) = measureTimedValue { signForJws(key.privateKey, input) }
+        Log.d { "[CRYPTO-TIMING] signWithDpopKey($resource)=$signTime inputSize=${input.size}" }
+        return result
+    }
+
+    override suspend fun readSmbCertificate(p12File: String, alias: String, password: String): ByteArray {
+        check(p12File.isNotEmpty()) { "SM-B certificate .PEM file is empty" }
+        return x509PemReader.loadCertificate(p12File, alias, password)
+    }
+
+    override suspend fun readSmbCertificateFromBytes(data: ByteArray, alias: String, password: String): ByteArray {
+        check(data.isNotEmpty()) { "SM-B certificate bytes are empty" }
+        return x509PemReader.loadCertificateFromBytes(data, alias, password)
+    }
+
+    override suspend fun getRegistrationNumber(certificate: ByteArray): String {
+        return x509PemReader.getRegistrationNumber(certificate).orEmpty()
+    }
+
+    override suspend fun signWithSmbKey(input: ByteArray, p12File: String, alias: String, password: String): ByteArray {
+        val smbKey = x509PemReader.loadPrivateKey(p12File, alias, password)
+        return signForJws(smbKey, input)
+    }
+
+    override suspend fun signWithSmbKeyFromBytes(input: ByteArray, keystoreBytes: ByteArray, alias: String, password: String): ByteArray {
+        val smbKey = x509PemReader.loadPrivateKeyFromBytes(keystoreBytes, alias, password)
+        return signForJws(smbKey, input)
+    }
+
+    override suspend fun randomUuid(): Uuid = Uuid.random()
+
+    override suspend fun forget(resource: String?) {
+        if (resource != null) {
+            storage.deleteDpopKeys(resource)
+        } else {
+            clientKey = null
+            storage.deleteAllDpopKeys()
+        }
+    }
+
+    private suspend fun loadDpopKeysFromStorage(resource: String): KeyPair? {
+        val privRaw = storage.getDpopPrivateKey(resource) ?: return null
+        val pubRaw = storage.getDpopPublicKey(resource) ?: return null
 
         return try {
             keyPairGenerator.loadKeys(
-                decodePem(privPem),
-                decodePem(pubPem),
+                decodePem(decodeHexPem(privRaw)),
+                decodePem(decodeHexPem(pubRaw)),
             )
         } catch (ex: Exception) {
-            Log.d { "Failed to load keys: ${ex.message}" }
+            Log.d { "Failed to load DPoP keys for $resource: ${ex.message}" }
+            null
+        }
+    }
+
+    private suspend fun loadClientKeysFromStorage(): KeyPair? {
+        val privRaw = storage.getClientPrivateKey() ?: return null
+        val pubRaw = storage.getClientPublicKey() ?: return null
+
+        return try {
+            keyPairGenerator.loadKeys(
+                decodePem(decodeHexPem(privRaw)),
+                decodePem(decodeHexPem(pubRaw)),
+            )
+        } catch (ex: Exception) {
+            Log.d { "Failed to load client keys: ${ex.message}" }
             null
         }
     }
@@ -111,80 +191,12 @@ private class SoftwareCryptoProvider(
             .lineSequence()
             .filter { it.isNotBlank() && !it.startsWith("-----") }
             .joinToString("")
-
         return Base64.getMimeDecoder().decode(b64)
     }
 
     private fun toPem(type: String, der: ByteArray): String {
         val b64 = Base64.getMimeEncoder(64, "\n".toByteArray()).encodeToString(der)
         return "-----BEGIN $type-----\n$b64\n-----END $type-----\n"
-    }
-
-    @Suppress("UnsafeCallOnNullableType")
-    override suspend fun generateDpopKey(): PublicKeyOut {
-        val start = TimeSource.Monotonic.markNow()
-        if (dpopKey == null) {
-            val (generated, genTime) = measureTimedValue { keyPairGenerator.generateKeys() }
-            dpopKey = generated
-            Log.d { "[CRYPTO-TIMING] generateDpopKeys=$genTime" }
-            val (_, saveTime) = measureTimedValue {
-                storage.saveDpopKeys(
-                    toPem("PUBLIC KEY", dpopKey!!.skpi),
-                    toPem("PRIVATE KEY", dpopKey!!.privateKey),
-                )
-            }
-            Log.d { "[CRYPTO-TIMING] saveDpopKeys=$saveTime" }
-        }
-        val jwk = keyPairGenerator.toJwk(dpopKey!!.skpi)
-        Log.d { "[CRYPTO-TIMING] generateDpopKey total=${start.elapsedNow()}" }
-        return PublicKeyOut(dpopKey!!.skpi, jwk)
-    }
-
-    @Suppress("UnsafeCallOnNullableType")
-    override suspend fun signWithClientKey(input: ByteArray): ByteArray {
-        checkNotNull(clientKey) { "Client key not initialized" }
-        val (result, signTime) = measureTimedValue { signForJws(clientKey!!.privateKey, input) }
-        Log.d { "[CRYPTO-TIMING] signWithClientKey=$signTime inputSize=${input.size}" }
-        return result
-    }
-
-    @Suppress("UnsafeCallOnNullableType")
-    override suspend fun signWithDpopKey(input: ByteArray): ByteArray {
-        checkNotNull(dpopKey) { "DPoP key not initialized" }
-        val (result, signTime) = measureTimedValue { signForJws(dpopKey!!.privateKey, input) }
-        Log.d { "[CRYPTO-TIMING] signWithDpopKey=$signTime inputSize=${input.size}" }
-        return result
-    }
-
-    override suspend fun readSmbCertificate(p12File: String, alias: String, password: String): ByteArray {
-        check(p12File.isNotEmpty()) { "SM-B certificate .PEM file is empty" }
-        return x509PemReader.loadCertificate(p12File, alias, password)
-    }
-
-    override suspend fun readSmbCertificateFromBytes(data: ByteArray, alias: String, password: String): ByteArray {
-        check(data.isNotEmpty()) { "SM-B certificate bytes are empty " }
-        return x509PemReader.loadCertificateFromBytes(data, alias, password)
-    }
-
-    override suspend fun getRegistrationNumber(certificate: ByteArray): String {
-        return x509PemReader.getRegistrationNumber(certificate).orEmpty()
-    }
-
-    override suspend fun signWithSmbKey(input: ByteArray, p12File: String, alias: String, password: String): ByteArray {
-        val smbKey = x509PemReader.loadPrivateKey(p12File, alias, password)
-        return signForJws(smbKey, input)
-    }
-
-    override suspend fun signWithSmbKeyFromBytes(input: ByteArray, keystoreBytes: ByteArray, alias: String, password: String): ByteArray {
-        val smbKey = x509PemReader.loadPrivateKeyFromBytes(keystoreBytes, alias, password)
-        return signForJws(smbKey, input)
-    }
-
-    override suspend fun randomUuid(): Uuid = Uuid.random()
-
-    override fun forget() {
-        clientKey = null
-        dpopKey = null
     }
 
     fun signForJws(privateKey: ByteArray, signingInput: ByteArray): ByteArray {
@@ -195,6 +207,7 @@ private class SoftwareCryptoProvider(
 
 @Suppress("FunctionOnlyReturningConstant")
 internal fun hardwareBackedAvailable(): Boolean = false
+
 actual fun platformDefaultProvider(storage: TpmStorage): TpmProvider {
     if (hardwareBackedAvailable()) {
         Log.d { "Using hardware crypto provider (JVM)" }

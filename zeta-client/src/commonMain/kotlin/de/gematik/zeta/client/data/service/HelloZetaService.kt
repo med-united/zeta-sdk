@@ -28,7 +28,7 @@ import de.gematik.zeta.client.di.DIContainer
 import de.gematik.zeta.client.di.DIContainer.POPP_TOKEN
 import de.gematik.zeta.client.di.POPP_TOKEN_HEADER_NAME
 
-public interface HelloZetaService {
+public fun interface HelloZetaService {
     public suspend fun helloZeta(): String
 }
 

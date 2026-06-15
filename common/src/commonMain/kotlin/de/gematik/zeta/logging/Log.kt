@@ -24,68 +24,62 @@
 
 package de.gematik.zeta.logging
 
-public expect object Log {
+public object Log {
+    private var logLevel: ZetaLogLevel = ZetaLogLevel.ERROR
+    private var customLogger: ZetaLogger? = null
 
-    /**
-     * Initializes the logger with a default configuration.
-     * This method should be called before using any logging methods.
-     */
-    public fun initDebugLogger()
+    public fun clearDestinations() {
+        logLevel = ZetaLogLevel.ERROR
+        customLogger = null
+    }
+    public fun setLogLevel(level: ZetaLogLevel) { logLevel = level }
+    public fun setLogger(logger: ZetaLogger) { customLogger = logger }
+    public fun initDebugLogger() { logLevel = ZetaLogLevel.DEBUG }
 
-    public fun clearDestinations()
+    private fun isEnabled(level: ZetaLogLevel): Boolean =
+        logLevel != ZetaLogLevel.NONE && level.ordinal >= logLevel.ordinal
 
-    /**
-     * Logs a debug message.
-     * @param throwable An optional throwable to log.
-     * @param tag Optional tag to be displayed, without one the Logger tries to use the stacktrace to get one
-     * @param message A lambda returning the message to log, evaluated lazily.
-     */
-    public fun d(
-        throwable: Throwable? = null,
-        tag: String? = null,
-        message: () -> String = { "" },
-    )
+    public fun d(throwable: Throwable? = null, tag: String? = null, message: () -> String) {
+        if (!isEnabled(ZetaLogLevel.DEBUG)) return
+        try {
+            customLogger?.d(tag, message, throwable)
+                ?: println("[DEBUG] [${tag ?: "Zeta"}] ${message()}")
+        } catch (e: Exception) {
+            println("[LOG-ERROR] d failed: ${e::class.simpleName} - ${e.message}")
+        }
+    }
 
-    /**
-     * Logs an informational message.
-     * @param throwable An optional throwable to log.
-     * @param tag Optional tag to be displayed, without one the Logger tries to use the stacktrace to get one
-     * @param message A lambda returning the message to log, evaluated lazily.
-     */
-    public fun i(
-        throwable: Throwable? = null,
-        tag: String? = null,
-        message: () -> String = { "" },
-    )
+    public fun i(throwable: Throwable? = null, tag: String? = null, message: () -> String) {
+        if (!isEnabled(ZetaLogLevel.INFO)) return
+        try {
+            customLogger?.i(tag, message, throwable)
+                ?: println("[INFO] [${tag ?: "Zeta"}] ${message()}")
+        } catch (e: Exception) {
+            println("[LOG-ERROR] i failed: ${e::class.simpleName} - ${e.message}")
+        }
+    }
 
-    /**
-     * Logs a warning message.
-     * @param throwable An optional throwable to log.
-     * @param tag Optional tag to be displayed, without one the Logger tries to use the stacktrace to get one
-     * @param message A lambda returning the message to log, evaluated lazily.
-     */
-    public fun w(
-        throwable: Throwable? = null,
-        tag: String? = null,
-        message: () -> String = { "" },
-    )
+    public fun w(throwable: Throwable? = null, tag: String? = null, message: () -> String) {
+        if (!isEnabled(ZetaLogLevel.WARN)) return
+        try {
+            customLogger?.w(tag, message, throwable)
+                ?: println("[WARN] [${tag ?: "Zeta"}] ${message()}")
+        } catch (e: Exception) {
+            println("[LOG-ERROR] w failed: ${e::class.simpleName} - ${e.message}")
+        }
+    }
 
-    /**
-     * Logs an error message.
-     * @param throwable An optional throwable to log.
-     * @param tag Optional tag to be displayed, without one the Logger tries to use the stacktrace to get one
-     * @param message A lambda returning the message to log, evaluated lazily.
-     */
-    public fun e(
-        throwable: Throwable? = null,
-        tag: String? = null,
-        message: () -> String = { "" },
-    )
+    public fun e(throwable: Throwable? = null, tag: String? = null, message: () -> String) {
+        if (!isEnabled(ZetaLogLevel.ERROR)) return
+        try {
+            customLogger?.e(tag, message, throwable)
+                ?: println("[ERROR] [${tag ?: "Zeta"}] ${message()}")
+        } catch (e: Exception) {
+            println("[LOG-ERROR] e failed: ${e::class.simpleName} - ${e.message}")
+        }
+    }
+}
 
-    /**
-     * Sets the debug mode for the logger.
-     * @param tag Optional tag to be displayed, without one the Logger tries to use the stacktrace to get one
-     * @param isDebug A boolean indicating if debug mode is enabled.
-     */
-    public fun setDebugMode(isDebug: Boolean)
+public enum class ZetaLogLevel {
+    DEBUG, INFO, WARN, ERROR, NONE
 }

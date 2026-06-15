@@ -79,7 +79,7 @@ class AuthenticationApiImpl(
         dpopToken: String,
     ): AccessTokenResponse {
         val sendTime = Clock.System.now()
-        Log.i { "[TOKEN-SEND] endpoint=$fromEndpoint time=$sendTime" }
+        Log.d { "[TOKEN-SEND] endpoint=$fromEndpoint time=$sendTime" }
 
         val response: ZetaHttpResponse = zetaHttpClient
             .submitForm(
@@ -90,7 +90,7 @@ class AuthenticationApiImpl(
             }
 
         val recvTime = Clock.System.now()
-        Log.i { "[TOKEN-RECV] endpoint=$fromEndpoint time=$recvTime duration=${recvTime - sendTime} status=${response.status}" }
+        Log.d { "[TOKEN-RECV] endpoint=$fromEndpoint time=$recvTime duration=${recvTime - sendTime} status=${response.status}" }
 
         return handleResponse(response)
     }
@@ -112,8 +112,13 @@ class AuthenticationApiImpl(
                 AccessTokenResponse(accessToken, expiresIn, refreshExpiresIn, tokenType, notBeforePolicy, sessionState, scope, issuedTokenType, refreshToken)
             }
 
-            HttpStatusCode.BadRequest, HttpStatusCode.Unauthorized -> {
-                throw RecoverableAuthenticationException(response.raw, response.bodyAsText())
+            HttpStatusCode.Unauthorized -> {
+                val bodyText = response.bodyAsText()
+                if (bodyText.contains("invalid_client")) {
+                    throw InvalidClientException(response.raw, bodyText)
+                } else {
+                    throw RecoverableAuthenticationException(response.raw, bodyText)
+                }
             }
 
             HttpStatusCode.Forbidden -> {
@@ -129,5 +134,6 @@ class AuthenticationApiImpl(
 }
 
 open class AuthenticationException(val response: HttpResponse, message: String) : Exception(message)
-class RecoverableAuthenticationException(response: HttpResponse, message: String) : AuthenticationException(response, message)
+open class RecoverableAuthenticationException(response: HttpResponse, message: String) : AuthenticationException(response, message)
+class InvalidClientException(response: HttpResponse, message: String) : RecoverableAuthenticationException(response, message)
 class NonRecoverableAuthenticationException(response: HttpResponse, message: String) : AuthenticationException(response, message)

@@ -48,4 +48,5 @@ public class CurlClientEngineConfig : HttpClientEngineConfig() {
     public var sslEcCurves: String? = null
     public var sslSignatureAlgorithms: String? = null
     public var tlsValidationConfig: TlsValidationConfig? = null
+    public var sslVerifyStatus: Boolean = true
 }

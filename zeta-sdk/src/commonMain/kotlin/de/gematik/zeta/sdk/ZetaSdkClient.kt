@@ -24,11 +24,12 @@
 
 package de.gematik.zeta.sdk
 
+import de.gematik.zeta.logging.ZetaLogger
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
-import de.gematik.zeta.sdk.storage.SdkStorage
+import de.gematik.zeta.sdk.storage.StorageConfig
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 
 interface ZetaSdkClient {
@@ -42,14 +43,10 @@ interface ZetaSdkClient {
         customHeaders: Map<String, String>? = null,
         block: suspend DefaultClientWebSocketSession.() -> R,
     )
+    suspend fun status(): Result<SdkStatus>
+    suspend fun logout(): Result<Unit>
     suspend fun close(): Result<Unit>
 }
-
-data class StorageConfig(
-    val provider: SdkStorage? = null,
-    // TODO: fix clients to generate their own B64 AES 256 key
-    val aesB64Key: String = "7aae7xXr8rnzVqjpYbosS0CFMrlprkD7jbVotm0fd+w=",
-)
 
 interface TpmConfig
 
@@ -64,6 +61,7 @@ data class BuildConfig(
     val httpClientBuilder: ZetaHttpClientBuilder? = null,
     val registrationCallback: RegistrationCallback? = null,
     val authenticationCallback: AuthenticationCallback? = null,
+    val logger: ZetaLogger? = null,
 )
 
 data class RegInfo(val clientName: String)

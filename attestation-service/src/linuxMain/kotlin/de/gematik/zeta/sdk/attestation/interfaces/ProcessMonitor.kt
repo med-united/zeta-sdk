@@ -35,7 +35,6 @@ import platform.posix.closedir
 import platform.posix.fclose
 import platform.posix.fgets
 import platform.posix.fopen
-import platform.posix.getenv
 import platform.posix.opendir
 import platform.posix.readdir
 import platform.posix.readlink
@@ -223,9 +222,4 @@ actual class ProcessMonitor actual constructor(private val allowedExecutables: L
         }
         return null
     }
-}
-
-@OptIn(ExperimentalForeignApi::class)
-actual fun getEnv(variable: String): String? {
-    return getenv(variable)?.toKString()
 }

@@ -130,6 +130,6 @@ public data class M3InnerLayer(
 @Serializable
 public data class AslErrorMessage(
     @SerialName("MessageType") val messageType: String,
-    @SerialName("ErrorCode") val errorCode: String,
+    @SerialName("ErrorCode") val errorCode: Int,
     @SerialName("ErrorMessage") val errorMessage: String,
 )

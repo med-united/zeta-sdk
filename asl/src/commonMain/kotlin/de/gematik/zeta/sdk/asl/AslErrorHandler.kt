@@ -47,4 +47,8 @@ public suspend fun handleMessageResponse(response: ZetaHttpResponse): ZetaHttpRe
 public suspend fun decodeAslError(response: HttpResponse): AslErrorMessage =
     cbor.decodeFromByteArray(AslErrorMessage.serializer(), response.bodyAsBytes())
 
-public class AslException(public val response: ZetaHttpResponse, errorMessage: String, errorCode: String) : Exception(errorMessage)
+public class AslException(
+    public val response: ZetaHttpResponse,
+    errorMessage: String,
+    public val errorCode: Int,
+) : Exception(errorMessage)

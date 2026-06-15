@@ -23,12 +23,15 @@ dependencies {
     kover(project(":network"))
     kover(project(":storage"))
     kover(project(":tpm"))
-    kover(project(":zeta-client"))
-    kover(project(":zeta-client-java"))
     kover(project(":zeta-sdk"))
-    kover(project(":zeta-testdriver"))
     kover(project(":asl"))
     kover(project(":crypto"))
+}
+
+allprojects {
+    tasks.cyclonedxDirectBom {
+        includeConfigs = listOf("runtimeClasspath", "compileClasspath")
+    }
 }
 
 sonar {
@@ -36,10 +39,25 @@ sonar {
         // mandatory for monorepos
         property("sonar.projectKey", "zeta_zeta-client_zeta-sdk_5b6b9b82-d91d-4748-afaa-3f5bcbfb0d8a")
         property("sonar.projectName", "zeta-sdk")
-        property("sonar.exclusions", "**/attestation-service/**")
+        property(
+            "sonar.coverage.exclusions",
+            listOf(
+                "**/desktopMain/**",
+                "**/linuxMain/**",
+                "**/mingwMain/**",
+                "**/macosMain/**",
+                "**/androidMain/**",
+                "**/iosMain/**",
+                "attestation-service/**",
+                "zeta-client/**",
+                "zeta-client-java/**",
+                "zeta-testdriver/**",
+                "zeta-nativetestdriver/**",
+            ).joinToString(",")
+        )
         property("sonar.coverage.jacoco.xmlReportPaths", "$rootDir/build/reports/kover/report.xml")
-        property("sonar.dependencyCheck.jsonReportPath","$rootDir/build/reports/dependency-check-report.json")
-        property("sonar.dependencyCheck.htmlReportPath","$rootDir/build/reports/dependency-check-report.html")
+        //property("sonar.dependencyCheck.jsonReportPath","$rootDir/build/reports/dependency-check-report.json")
+        //property("sonar.dependencyCheck.htmlReportPath","$rootDir/build/reports/dependency-check-report.html")
     }
 }
 

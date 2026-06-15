@@ -26,17 +26,22 @@ package de.gematik.zeta.sdk.authentication.smcb
 
 import de.gematik.zeta.sdk.authentication.smcb.model.ExternalAuthenticateResponse
 import de.gematik.zeta.sdk.authentication.smcb.model.ReadCardCertificateResponse
-import de.gematik.zeta.sdk.authentication.smcb.model.SignatureObject
-import de.gematik.zeta.sdk.authentication.smcb.model.Status
-import de.gematik.zeta.sdk.authentication.smcb.model.X509Data
-import de.gematik.zeta.sdk.authentication.smcb.model.X509DataInfo
-import de.gematik.zeta.sdk.authentication.smcb.model.X509DataInfoList
-import de.gematik.zeta.sdk.authentication.smcb.model.X509IssuerSerial
 import de.gematik.zeta.sdk.authentication.smcb.model.decodeFromSoap
-import io.mockk.coEvery
-import io.mockk.mockk
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
+import io.ktor.client.plugins.DefaultRequest
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.http.ContentType
+import io.ktor.http.Headers
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import io.ktor.http.takeFrom
+import io.ktor.serialization.kotlinx.xml.xml
 import kotlinx.coroutines.test.runTest
 import nl.adaptivity.xmlutil.serialization.XML
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -44,260 +49,353 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ConnectorApiImplTest {
+    data class CapturedRequest(
+        val method: String,
+        val url: String,
+        val headers: Headers,
+        val body: String,
+        val contentType: ContentType?,
+    )
 
-    private val xml = XML {
-        indentString = ""
-        autoPolymorphic = false
+    private val captured = mutableListOf<CapturedRequest>()
+
+    @BeforeTest
+    fun setUp() { captured.clear() }
+
+    private val last get() = captured.last()
+    private val baseUrl = "http://connector.example.com/"
+    private val cardHandle = "card-handle-001"
+    private val mandantId = "mandant-001"
+    private val clientSysId = "client-sys-001"
+    private val workspaceId = "workspace-001"
+    private val userId = "user-001"
+    private val base64Chall = "dGVzdC1jaGFsbGVuZ2U="
+
+    private val config = SmcbTokenProvider.ConnectorConfig(
+        baseUrl = baseUrl,
+        mandantId = mandantId,
+        clientSystemId = clientSysId,
+        workspaceId = workspaceId,
+        userId = userId,
+        cardHandle = cardHandle,
+    )
+
+    private val xml = XML { indentString = ""; autoPolymorphic = false }
+
+    private val readCertSoapResponse = """
+        <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
+            <SOAP-ENV:Header/>
+            <SOAP-ENV:Body>
+                <CERT:ReadCardCertificateResponse xmlns:CERT="http://ws.gematik.de/conn/CertificateService/v6.0">
+                    <CONN:Status xmlns:CONN="http://ws.gematik.de/conn/ConnectorCommon/v5.0">
+                        <CONN:Result>OK</CONN:Result>
+                    </CONN:Status>
+                    <CERTCMN:X509DataInfoList xmlns:CERTCMN="http://ws.gematik.de/conn/CertificateServiceCommon/v2.0">
+                        <CERTCMN:X509DataInfo>
+                            <CERTCMN:CertRef>C.AUT</CERTCMN:CertRef>
+                            <CERTCMN:X509Data>
+                                <CERTCMN:X509IssuerSerial>
+                                    <CERTCMN:X509IssuerName>CN=Test</CERTCMN:X509IssuerName>
+                                    <CERTCMN:X509SerialNumber>123</CERTCMN:X509SerialNumber>
+                                </CERTCMN:X509IssuerSerial>
+                                <CERTCMN:X509SubjectName>CN=Subject</CERTCMN:X509SubjectName>
+                                <CERTCMN:X509Certificate>dGVzdENlcnQ=</CERTCMN:X509Certificate>
+                            </CERTCMN:X509Data>
+                        </CERTCMN:X509DataInfo>
+                    </CERTCMN:X509DataInfoList>
+                </CERT:ReadCardCertificateResponse>
+            </SOAP-ENV:Body>
+        </SOAP-ENV:Envelope>
+    """.trimIndent()
+
+    private val externalAuthSoapResponse = """
+        <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
+            <SOAP-ENV:Header/>
+            <SOAP-ENV:Body>
+                <SIG:ExternalAuthenticateResponse xmlns:SIG="http://ws.gematik.de/conn/SignatureService/v7.4">
+                    <CONN:Status xmlns:CONN="http://ws.gematik.de/conn/ConnectorCommon/v5.0">
+                        <CONN:Result>OK</CONN:Result>
+                    </CONN:Status>
+                    <DSS:SignatureObject xmlns:DSS="urn:oasis:names:tc:dss:1.0:core:schema">
+                        <DSS:Base64Signature>c2lnbmF0dXJl</DSS:Base64Signature>
+                    </DSS:SignatureObject>
+                </SIG:ExternalAuthenticateResponse>
+            </SOAP-ENV:Body>
+        </SOAP-ENV:Envelope>
+    """.trimIndent()
+
+    private fun soapFault(faultCode: String, faultString: String) = """
+        <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
+            <SOAP-ENV:Header/>
+            <SOAP-ENV:Body>
+                <SOAP-ENV:Fault>
+                    <faultcode>$faultCode</faultcode>
+                    <faultstring>$faultString</faultstring>
+                </SOAP-ENV:Fault>
+            </SOAP-ENV:Body>
+        </SOAP-ENV:Envelope>
+    """.trimIndent()
+
+    private fun buildApi(responseBody: String): ConnectorApiImpl {
+        val engine = MockEngine { request ->
+            captured += CapturedRequest(
+                method = request.method.value,
+                url = request.url.toString(),
+                headers = request.headers,
+                body = request.body.toByteArray().decodeToString(),
+                contentType = request.body.contentType,
+            )
+            respond(
+                content = responseBody,
+                status = HttpStatusCode.OK,
+                headers = headersOf("Content-Type", ContentType.Text.Xml.toString()),
+            )
+        }
+        val mockClient = HttpClient(engine) {
+            install(DefaultRequest) { url { takeFrom(baseUrl) } }
+            install(ContentNegotiation) { xml() }
+        }
+        return ConnectorApiImpl(config, httpClientFactory = { _ -> mockClient })
     }
 
     @Test
-    fun `given ReadCardCertificateResponse SOAP when deserialized then returns correct response`() {
-        // given
-        val soapXml = """
-            <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
-                <SOAP-ENV:Header/>
-                <SOAP-ENV:Body>
-                    <CERT:ReadCardCertificateResponse xmlns:CERT="http://ws.gematik.de/conn/CertificateService/v6.0">
-                        <CONN:Status xmlns:CONN="http://ws.gematik.de/conn/ConnectorCommon/v5.0">
-                            <CONN:Result>OK</CONN:Result>
-                        </CONN:Status>
-                        <CERTCMN:X509DataInfoList xmlns:CERTCMN="http://ws.gematik.de/conn/CertificateServiceCommon/v2.0">
-                            <CERTCMN:X509DataInfo>
-                                <CERTCMN:CertRef>C.AUT</CERTCMN:CertRef>
-                                <CERTCMN:X509Data>
-                                    <CERTCMN:X509IssuerSerial>
-                                        <CERTCMN:X509IssuerName>CN=Test</CERTCMN:X509IssuerName>
-                                        <CERTCMN:X509SerialNumber>123</CERTCMN:X509SerialNumber>
-                                    </CERTCMN:X509IssuerSerial>
-                                    <CERTCMN:X509SubjectName>CN=Subject</CERTCMN:X509SubjectName>
-                                    <CERTCMN:X509Certificate>dGVzdENlcnQ=</CERTCMN:X509Certificate>
-                                </CERTCMN:X509Data>
-                            </CERTCMN:X509DataInfo>
-                        </CERTCMN:X509DataInfoList>
-                    </CERT:ReadCardCertificateResponse>
-                </SOAP-ENV:Body>
-            </SOAP-ENV:Envelope>
-        """.trimIndent()
+    fun readCertificate_usesPostMethod() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertEquals("POST", last.method)
+    }
 
-        // when
-        val response = soapXml.decodeFromSoap(ReadCardCertificateResponse.serializer(), xml)
+    @Test
+    fun readCertificate_targetsCorrectEndpoint() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertTrue(last.url.endsWith("CertificateService"), "Expected CertificateService endpoint, got: ${last.url}")
+    }
 
-        // then
+    @Test
+    fun readCertificate_setsXmlContentType() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+
+        assertEquals(ContentType.Text.Xml, last.contentType?.withoutParameters())
+    }
+
+    @Test
+    fun readCertificate_setsCorrectSoapAction() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertEquals("ReadCardCertificate", last.headers["SOAPAction"])
+    }
+
+    @Test
+    fun readCertificate_includesCardHandleInBody() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertTrue(last.body.contains(cardHandle))
+    }
+
+    @Test
+    fun readCertificate_includesMandantIdInBody() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertTrue(last.body.contains(mandantId))
+    }
+
+    @Test
+    fun readCertificate_includesCAutCertRefInBody() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertTrue(last.body.contains("C.AUT"))
+    }
+
+    @Test
+    fun readCertificate_includesClientSystemIdInBody_whenProvided() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertTrue(last.body.contains(clientSysId))
+    }
+
+    @Test
+    fun readCertificate_includesWorkspaceIdInBody_whenProvided() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertTrue(last.body.contains(workspaceId))
+    }
+
+    @Test
+    fun readCertificate_sendsWellFormedSoapBody_whenOptionalContextFieldsAreNull() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(
+            cardHandle, mandantId,
+            clientSystemId = null,
+            workspaceId = null,
+            userId = null,
+        )
+        assertTrue(last.body.contains(cardHandle))
+        assertTrue(last.body.contains(mandantId))
+    }
+
+    // ── readCertificate — response parsing ────────────────────────────────────
+
+    @Test
+    fun readCertificate_returnsNonNullResponse() = runTest {
+        val response = buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertNotNull(response)
+    }
+
+    @Test
+    fun readCertificate_returnsStatusOk() = runTest {
+        val response = buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
         assertEquals("OK", response.status.result)
-        assertEquals(1, response.x509DataInfoList.x509DataInfo.size)
+    }
+
+    @Test
+    fun readCertificate_returnsCertificateInResponse() = runTest {
+        val response = buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        assertTrue(response.x509DataInfoList.x509DataInfo.isNotEmpty())
         assertEquals("dGVzdENlcnQ=", response.x509DataInfoList.x509DataInfo[0].x509Data.x509Certificate)
-        assertEquals("CN=Test", response.x509DataInfoList.x509DataInfo[0].x509Data.x509IssuerSerial.x509IssuerName)
-        assertEquals("123", response.x509DataInfoList.x509DataInfo[0].x509Data.x509IssuerSerial.x509SerialNumber)
     }
 
     @Test
-    fun `given ExternalAuthenticateResponse SOAP when deserialized then returns correct response`() {
-        // given
-        val soapXml = """
-            <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
-                <SOAP-ENV:Header/>
-                <SOAP-ENV:Body>
-                    <SIG:ExternalAuthenticateResponse xmlns:SIG="http://ws.gematik.de/conn/SignatureService/v7.4">
-                        <CONN:Status xmlns:CONN="http://ws.gematik.de/conn/ConnectorCommon/v5.0">
-                            <CONN:Result>OK</CONN:Result>
-                        </CONN:Status>
-                        <DSS:SignatureObject xmlns:DSS="urn:oasis:names:tc:dss:1.0:core:schema">
-                            <DSS:Base64Signature>c2lnbmF0dXJl</DSS:Base64Signature>
-                        </DSS:SignatureObject>
-                    </SIG:ExternalAuthenticateResponse>
-                </SOAP-ENV:Body>
-            </SOAP-ENV:Envelope>
-        """.trimIndent()
-
-        // when
-        val response = soapXml.decodeFromSoap(ExternalAuthenticateResponse.serializer(), xml)
-
-        // then
-        assertEquals("OK", response.status.result)
-        assertEquals("c2lnbmF0dXJl", response.signatureObject.base64Signature)
-    }
-
-    @Test
-    fun `given SOAP fault when deserialized then throws ConnectorError`() {
-        // given
-        val soapFault = """
-            <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
-                <SOAP-ENV:Header/>
-                <SOAP-ENV:Body>
-                    <SOAP-ENV:Fault>
-                        <faultcode>SOAP-ENV:Server</faultcode>
-                        <faultstring>Card not found</faultstring>
-                    </SOAP-ENV:Fault>
-                </SOAP-ENV:Body>
-            </SOAP-ENV:Envelope>
-        """.trimIndent()
-
-        // when & then
+    fun readCertificate_throwsConnectorError_whenServerReturnsSoapFault() = runTest {
         val error = assertFailsWith<ConnectorError> {
-            soapFault.decodeFromSoap(ReadCardCertificateResponse.serializer(), xml)
+            buildApi(soapFault("SOAP-ENV:Server", "Card not found"))
+                .readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
         }
         assertEquals("SOAP-ENV:Server", error.faultCode)
         assertEquals("Card not found", error.faultString)
     }
 
     @Test
-    fun `given SOAP fault with client code when deserialized then throws ConnectorError with correct code`() {
-        // given
-        val soapFault = """
-            <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
-                <SOAP-ENV:Header/>
-                <SOAP-ENV:Body>
-                    <SOAP-ENV:Fault>
-                        <faultcode>SOAP-ENV:Client</faultcode>
-                        <faultstring>Invalid request</faultstring>
-                    </SOAP-ENV:Fault>
-                </SOAP-ENV:Body>
-            </SOAP-ENV:Envelope>
-        """.trimIndent()
+    fun externalAuthenticate_usesPostMethod() = runTest {
+        buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertEquals("POST", last.method)
+    }
 
-        // when & then
+    @Test
+    fun externalAuthenticate_targetsCorrectEndpoint() = runTest {
+        buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertTrue(last.url.endsWith("AuthSignatureService"), "Expected AuthSignatureService endpoint, got: ${last.url}")
+    }
+
+    @Test
+    fun externalAuthenticate_setsXmlContentType() = runTest {
+        buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+
+        assertEquals(ContentType.Text.Xml, last.contentType?.withoutParameters())
+    }
+
+    @Test
+    fun externalAuthenticate_setsCorrectSoapAction() = runTest {
+        buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertEquals("ExternalAuthenticate", last.headers["SOAPAction"])
+    }
+
+    @Test
+    fun externalAuthenticate_includesCardHandleInBody() = runTest {
+        buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertTrue(last.body.contains(cardHandle))
+    }
+
+    @Test
+    fun externalAuthenticate_includesMandantIdInBody() = runTest {
+        buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertTrue(last.body.contains(mandantId))
+    }
+
+    @Test
+    fun externalAuthenticate_includesChallengeInBody() = runTest {
+        buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertTrue(last.body.contains(base64Chall))
+    }
+
+    @Test
+    fun externalAuthenticate_includesEcdsaAlgorithmUriInBody() = runTest {
+        buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertTrue(last.body.contains("urn:bsi:tr:03111:ecdsa"))
+    }
+
+    @Test
+    fun externalAuthenticate_sendsWellFormedSoapBody_whenOptionalContextFieldsAreNull() = runTest {
+        buildApi(externalAuthSoapResponse).externalAuthenticate(
+            cardHandle, mandantId,
+            clientSystemId = null,
+            workspaceId = null,
+            userId = null,
+            base64Challenge = base64Chall,
+        )
+        assertTrue(last.body.contains(cardHandle))
+        assertTrue(last.body.contains(base64Chall))
+    }
+
+    // ── externalAuthenticate — response parsing ───────────────────────────────
+
+    @Test
+    fun externalAuthenticate_returnsNonNullResponse() = runTest {
+        val response = buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertNotNull(response)
+    }
+
+    @Test
+    fun externalAuthenticate_returnsStatusOk() = runTest {
+        val response = buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertEquals("OK", response.status.result)
+    }
+
+    @Test
+    fun externalAuthenticate_returnsSignatureInResponse() = runTest {
+        val response = buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        assertNotNull(response.signatureObject)
+        assertEquals("c2lnbmF0dXJl", response.signatureObject.base64Signature)
+    }
+
+    @Test
+    fun externalAuthenticate_throwsConnectorError_whenServerReturnsSoapFault() = runTest {
         val error = assertFailsWith<ConnectorError> {
-            soapFault.decodeFromSoap(ExternalAuthenticateResponse.serializer(), xml)
+            buildApi(soapFault("SOAP-ENV:Client", "Invalid request"))
+                .externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
         }
         assertEquals("SOAP-ENV:Client", error.faultCode)
         assertEquals("Invalid request", error.faultString)
-        assertTrue(error.message!!.contains("SOAP-ENV:Client"))
-        assertTrue(error.message!!.contains("Invalid request"))
     }
 
-    // -- ConnectorApi interface contract tests via mock --
+    // ═════════════════════════════════════════════════════════════════════════
+    // Endpoint isolation
+    // ═════════════════════════════════════════════════════════════════════════
 
     @Test
-    fun `given mocked ConnectorApi when readCertificate then returns expected response`() =
-        runTest {
-            // given
-            val mockApi = mockk<ConnectorApi>()
-            val expectedResponse = ReadCardCertificateResponse(
-                Status("OK"),
-                X509DataInfoList(
-                    listOf(
-                        X509DataInfo(
-                            "C.AUT",
-                            X509Data(X509IssuerSerial("issuer", "serial"), "subject", "cert123"),
-                        ),
-                    ),
-                ),
-            )
-            coEvery {
-                mockApi.readCertificate("card", "mandant", "client", "workspace", "user")
-            } returns expectedResponse
+    fun readCertificate_andExternalAuthenticate_useDifferentEndpoints() = runTest {
+        buildApi(readCertSoapResponse).readCertificate(cardHandle, mandantId, clientSysId, workspaceId, userId)
+        val certUrl = last.url
 
-            // when
-            val response = mockApi.readCertificate("card", "mandant", "client", "workspace", "user")
+        buildApi(externalAuthSoapResponse).externalAuthenticate(cardHandle, mandantId, clientSysId, workspaceId, userId, base64Chall)
+        val authUrl = last.url
 
-            // then
-            assertEquals("OK", response.status.result)
-            assertEquals("cert123", response.x509DataInfoList.x509DataInfo[0].x509Data.x509Certificate)
+        assertTrue(certUrl.endsWith("CertificateService"))
+        assertTrue(authUrl.endsWith("AuthSignatureService"))
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // SOAP fault deserialization (unit — no HTTP)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    @Test
+    fun decodeFromSoap_throwsConnectorError_withServerFaultCode() {
+        val error = assertFailsWith<ConnectorError> {
+            soapFault("SOAP-ENV:Server", "Card not found")
+                .decodeFromSoap(ReadCardCertificateResponse.serializer(), xml)
         }
-
-    @Test
-    fun `given mocked ConnectorApi when externalAuthenticate then returns expected response`() =
-        runTest {
-            // given
-            val mockApi = mockk<ConnectorApi>()
-            val expectedResponse = ExternalAuthenticateResponse(
-                Status("OK"),
-                SignatureObject("base64sig"),
-            )
-            coEvery {
-                mockApi.externalAuthenticate("card", "mandant", "client", "workspace", "user", "challenge")
-            } returns expectedResponse
-
-            // when
-            val response = mockApi.externalAuthenticate("card", "mandant", "client", "workspace", "user", "challenge")
-
-            // then
-            assertEquals("OK", response.status.result)
-            assertEquals("base64sig", response.signatureObject.base64Signature)
-        }
-
-    @Test
-    fun `given mocked ConnectorApi when readCertificate fails then throws ConnectorError`() =
-        runTest {
-            // given
-            val mockApi = mockk<ConnectorApi>()
-            coEvery {
-                mockApi.readCertificate(any(), any(), any(), any(), any())
-            } throws ConnectorError("SOAP-ENV:Server", "Internal", "Internal error")
-
-            // when & then
-            val error = assertFailsWith<ConnectorError> {
-                mockApi.readCertificate("card", "mandant", "client", "workspace", "user")
-            }
-            assertEquals("SOAP-ENV:Server", error.faultCode)
-        }
-
-    @Test
-    fun `given ConnectorApiImpl when constructed then config is accessible`() {
-        // given
-        val config = SmcbTokenProvider.ConnectorConfig(
-            baseUrl = "https://test.connector",
-            mandantId = "m1",
-            clientSystemId = "cs1",
-            workspaceId = "ws1",
-            userId = "u1",
-            cardHandle = "ch1",
-        )
-
-        // when
-        val api = ConnectorApiImpl(config)
-
-        // then
-        assertEquals("https://test.connector", api.config.baseUrl)
-        assertNotNull(api.xml)
+        assertEquals("SOAP-ENV:Server", error.faultCode)
+        assertEquals("Card not found", error.faultString)
     }
 
     @Test
-    fun `given ReadCardCertificateResponse with multiple certificates then all are present`() {
-        // given
-        val soapXml = """
-            <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
-                <SOAP-ENV:Header/>
-                <SOAP-ENV:Body>
-                    <CERT:ReadCardCertificateResponse xmlns:CERT="http://ws.gematik.de/conn/CertificateService/v6.0">
-                        <CONN:Status xmlns:CONN="http://ws.gematik.de/conn/ConnectorCommon/v5.0">
-                            <CONN:Result>OK</CONN:Result>
-                        </CONN:Status>
-                        <CERTCMN:X509DataInfoList xmlns:CERTCMN="http://ws.gematik.de/conn/CertificateServiceCommon/v2.0">
-                            <CERTCMN:X509DataInfo>
-                                <CERTCMN:CertRef>C.AUT</CERTCMN:CertRef>
-                                <CERTCMN:X509Data>
-                                    <CERTCMN:X509IssuerSerial>
-                                        <CERTCMN:X509IssuerName>CN=Issuer1</CERTCMN:X509IssuerName>
-                                        <CERTCMN:X509SerialNumber>1</CERTCMN:X509SerialNumber>
-                                    </CERTCMN:X509IssuerSerial>
-                                    <CERTCMN:X509SubjectName>CN=Sub1</CERTCMN:X509SubjectName>
-                                    <CERTCMN:X509Certificate>Y2VydDE=</CERTCMN:X509Certificate>
-                                </CERTCMN:X509Data>
-                            </CERTCMN:X509DataInfo>
-                            <CERTCMN:X509DataInfo>
-                                <CERTCMN:CertRef>C.ENC</CERTCMN:CertRef>
-                                <CERTCMN:X509Data>
-                                    <CERTCMN:X509IssuerSerial>
-                                        <CERTCMN:X509IssuerName>CN=Issuer2</CERTCMN:X509IssuerName>
-                                        <CERTCMN:X509SerialNumber>2</CERTCMN:X509SerialNumber>
-                                    </CERTCMN:X509IssuerSerial>
-                                    <CERTCMN:X509SubjectName>CN=Sub2</CERTCMN:X509SubjectName>
-                                    <CERTCMN:X509Certificate>Y2VydDI=</CERTCMN:X509Certificate>
-                                </CERTCMN:X509Data>
-                            </CERTCMN:X509DataInfo>
-                        </CERTCMN:X509DataInfoList>
-                    </CERT:ReadCardCertificateResponse>
-                </SOAP-ENV:Body>
-            </SOAP-ENV:Envelope>
-        """.trimIndent()
+    fun decodeFromSoap_throwsConnectorError_withClientFaultCode() {
+        val error = assertFailsWith<ConnectorError> {
+            soapFault("SOAP-ENV:Client", "Invalid request")
+                .decodeFromSoap(ExternalAuthenticateResponse.serializer(), xml)
+        }
+        assertEquals("SOAP-ENV:Client", error.faultCode)
+        assertEquals("Invalid request", error.faultString)
+    }
 
-        // when
-        val response = soapXml.decodeFromSoap(ReadCardCertificateResponse.serializer(), xml)
-
-        // then
-        assertEquals(2, response.x509DataInfoList.x509DataInfo.size)
-        assertEquals("Y2VydDE=", response.x509DataInfoList.x509DataInfo[0].x509Data.x509Certificate)
-        assertEquals("Y2VydDI=", response.x509DataInfoList.x509DataInfo[1].x509Data.x509Certificate)
+    @Test
+    fun decodeFromSoap_connectorErrorMessage_containsFaultCodeAndFaultString() {
+        val error = assertFailsWith<ConnectorError> {
+            soapFault("SOAP-ENV:Client", "Invalid request")
+                .decodeFromSoap(ExternalAuthenticateResponse.serializer(), xml)
+        }
+        assertTrue(error.message?.contains("SOAP-ENV:Client") == true)
+        assertTrue(error.message?.contains("Invalid request") == true)
     }
 }

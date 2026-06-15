@@ -30,4 +30,5 @@ import kotlinx.serialization.Serializable
 public data class ConfigureRequest(
     val caCertificatePem: String,
     val resource: String,
+    val disableTlsVerification: Boolean,
 )

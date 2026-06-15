@@ -21,11 +21,10 @@
  * For additional notes and disclaimer from gematik and in case of changes by gematik find details in the "Readme" file.
  * #L%
  */
+package de.gematik.zeta.sdk.attestation
 
 import de.gematik.zeta.logging.Log
 import de.gematik.zeta.platform.getPlatformInfo
-import de.gematik.zeta.sdk.attestation.AttestationResponse
-import de.gematik.zeta.sdk.attestation.AttestationService
 import de.gematik.zeta.sdk.attestation.model.AttestationConfig
 import de.gematik.zeta.sdk.attestation.model.ClientAssertionJwt
 import de.gematik.zeta.sdk.attestation.model.ClientSelfAssessment
@@ -48,6 +47,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import randomUUID
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.Base64.PaddingOption
 import kotlin.time.Clock
@@ -56,7 +56,7 @@ import kotlin.time.Clock
  * Builds a **client assertion JWT** used to authenticate a client during token exchange
  * and embeds a **client-statement** with an attestation challenge.
  */
-interface AttestationApi {
+fun interface AttestationApi {
 
     /**
      * Create a **signed client assertion (JWT)** for the given client and audience, including a

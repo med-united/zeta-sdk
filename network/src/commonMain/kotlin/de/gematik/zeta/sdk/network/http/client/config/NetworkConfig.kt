@@ -40,8 +40,6 @@ public data class NetworkConfig(
     val connectionTimeoutMillis: Long = 15_000,
     val requestTimeoutMillis: Long = 30_000,
     val socketTimeoutMillis: Long = 60_000,
-    val maxRequest: Int = 30,
-    val maxRequestPerHost: Int = 30,
     val retryStatusCodes: Set<HttpStatusCode> = emptySet(),
     val maxRetries: Int = 0,
     val retryOnlyIdempotent: Boolean = true,

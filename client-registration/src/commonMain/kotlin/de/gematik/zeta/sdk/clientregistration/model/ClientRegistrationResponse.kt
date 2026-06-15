@@ -33,7 +33,7 @@ data class ClientRegistrationResponse(
     @SerialName("token_endpoint_auth_method") val tokenEndpointAuthMethod: String? = null,
     @SerialName("grant_types") val grantTypes: List<String> = emptyList(),
     @SerialName("response_types") val responseTypes: List<String> = emptyList(),
-    @SerialName("client_id") var clientId: String, // TODO: change to val when registration endpoint works
+    @SerialName("client_id") var clientId: String,
     @SerialName("client_secret") val clientSecret: String? = null,
     @SerialName("client_name") val clientName: String? = null,
     val scope: String? = null,

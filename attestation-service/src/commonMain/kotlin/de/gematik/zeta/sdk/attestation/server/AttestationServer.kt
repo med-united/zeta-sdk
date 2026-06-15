@@ -46,6 +46,7 @@ import io.ktor.server.plugins.origin
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -78,102 +79,102 @@ class AttestationServer(
 
     private fun Application.configureRouting() {
         routing {
-            post("/attest") {
-                try {
-                    val request = call.receive<AttestationRequest>()
-                    val response = service.buildAttestationResponse(request, call.request.origin)
+            httpRoutes()
+            webSocketRoutes()
+        }
+    }
 
-                    call.respondText(
-                        text = json.encodeToString(AttestationResponse.serializer(), response),
-                        contentType = ContentType.Application.Json,
-                        status = HttpStatusCode.OK,
-                    )
-                } catch (e: IllegalArgumentException) {
-                    call.respond(HttpStatusCode.BadRequest, e.message ?: "Invalid request")
-                } catch (e: Exception) {
-                    Log.e { e.stackTraceToString() }
-                    call.respond(HttpStatusCode.InternalServerError, e.message ?: "Internal error")
-                }
+    private fun Route.httpRoutes() {
+        post("/attest") {
+            try {
+                val request = call.receive<AttestationRequest>()
+                val response = service.buildAttestationResponse(request, call.request.origin)
+                call.respondText(
+                    text = json.encodeToString(AttestationResponse.serializer(), response),
+                    contentType = ContentType.Application.Json,
+                    status = HttpStatusCode.OK,
+                )
+            } catch (e: IllegalArgumentException) {
+                call.respond(HttpStatusCode.BadRequest, e.message ?: "Invalid request")
+            } catch (e: Exception) {
+                Log.e { e.stackTraceToString() }
+                call.respond(HttpStatusCode.InternalServerError, e.message ?: "Internal error")
             }
+        }
 
-            post("/verify-integrity") {
-                try {
-                    val request = call.receive<VerifyIntegrityRequest>()
-                    val verifyIntegrity = service.verifyIntegrity(request)
-                    call.respond(HttpStatusCode.OK, verifyIntegrity)
-                } catch (ex: Exception) {
-                    Log.e { ex.stackTraceToString() }
-                    call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
-                }
+        post("/verify-integrity") {
+            try {
+                val request = call.receive<VerifyIntegrityRequest>()
+                val verifyIntegrity = service.verifyIntegrity(request)
+                call.respond(HttpStatusCode.OK, verifyIntegrity)
+            } catch (ex: Exception) {
+                Log.e { ex.stackTraceToString() }
+                call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
             }
+        }
 
-            get("/health") {
-                try {
-                    val health = service.health()
-                    call.respond(HttpStatusCode.OK, health)
-                } catch (ex: Exception) {
-                    Log.e { ex.stackTraceToString() }
-                    call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
-                }
+        get("/health") {
+            try {
+                val health = service.health()
+                call.respond(HttpStatusCode.OK, health)
+            } catch (ex: Exception) {
+                Log.e { ex.stackTraceToString() }
+                call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
             }
+        }
 
-            get("/process-pid") {
-                try {
-                    val pid = service.processPid(call.request.origin)
-                    call.respond(HttpStatusCode.OK, pid)
-                } catch (ex: Exception) {
-                    Log.e { ex.stackTraceToString() }
-                    call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
-                }
+        get("/process-pid") {
+            try {
+                val pid = service.processPid(call.request.origin)
+                call.respond(HttpStatusCode.OK, pid)
+            } catch (ex: Exception) {
+                Log.e { ex.stackTraceToString() }
+                call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
             }
+        }
+    }
 
-            webSocket("/file-monitor") {
-                try {
-                    for (frame in incoming) {
-                        Log.i { "Incoming Frame: $frame" }
-                        if (frame is Frame.Text) {
-                            val text = frame.readText()
-                            Log.i { "Frame.Text: $text" }
-                            val request = Json.decodeFromString<FileMonitorRequest>(text)
-                            service.fileMonitor(request) { file, event ->
-                                val response = Json.encodeToString(FileMonitorResponse(file, event))
-                                runBlocking {
-                                    send(Frame.Text(response))
-                                }
-                            }
+    private fun Route.webSocketRoutes() {
+        webSocket("/file-monitor") {
+            try {
+                for (frame in incoming) {
+                    Log.i { "Incoming Frame: $frame" }
+                    if (frame is Frame.Text) {
+                        val text = frame.readText()
+                        Log.i { "Frame.Text: $text" }
+                        val request = Json.decodeFromString<FileMonitorRequest>(text)
+                        service.fileMonitor(request) { file, event ->
+                            val response = Json.encodeToString(FileMonitorResponse(file, event))
+                            runBlocking { send(Frame.Text(response)) }
                         }
                     }
-                    service.stopFileMonitor()
-                } catch (ex: Exception) {
-                    Log.e { ex.stackTraceToString() }
-                    call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
                 }
+                service.stopFileMonitor()
+            } catch (ex: Exception) {
+                Log.e { ex.stackTraceToString() }
+                call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
             }
+        }
 
-            webSocket("/integrity") {
-                try {
-                    val initialState = service.currentIntegrityState()
-                    val initialResponse = Json.encodeToString(VerifyIntegrityResponse.serializer(), initialState)
-                    send(Frame.Text(initialResponse))
+        webSocket("/integrity") {
+            try {
+                val initialState = service.currentIntegrityState()
+                val initialResponse = Json.encodeToString(VerifyIntegrityResponse.serializer(), initialState)
+                send(Frame.Text(initialResponse))
 
-                    val unsubscribe = service.subscribeIntegrity { state ->
-                        val response = Json.encodeToString(VerifyIntegrityResponse.serializer(), state)
-                        runBlocking {
-                            send(Frame.Text(response))
-                        }
-                    }
-
-                    for (frame in incoming) {
-                        if (frame is Frame.Close) {
-                            break
-                        }
-                    }
-
-                    unsubscribe()
-                } catch (ex: Exception) {
-                    Log.e { ex.stackTraceToString() }
-                    call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
+                val unsubscribe = service.subscribeIntegrity { state ->
+                    val response = Json.encodeToString(VerifyIntegrityResponse.serializer(), state)
+                    runBlocking { send(Frame.Text(response)) }
                 }
+
+                for (frame in incoming) {
+                    if (frame is Frame.Close) break
+                }
+
+                unsubscribe()
+            } catch (ex: Exception) {
+                Log.e { ex.stackTraceToString() }
+                call.respond(HttpStatusCode.InternalServerError, ex.message ?: "Error")
             }
         }
     }

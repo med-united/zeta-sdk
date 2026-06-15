@@ -33,12 +33,13 @@ public data class TlsValidationResult(
 
 public object ZetaTlsValidator {
     public fun validateNegotiatedCipherSuite(negotiated: String): TlsValidationResult {
-        val errors = mutableListOf<String>()
-        val warnings = mutableListOf<String>()
-        if (negotiated !in ZetaCipherSuites.FULL_PREFERRED_ORDER_IANA) {
-            errors += "Cipher suite '$negotiated' is not in the allowed list"
+        val normalizedNegotiated = ZetaCipherSuites.OPENSSL_TO_IANA[negotiated] ?: negotiated
+        val errors = if (normalizedNegotiated !in ZetaCipherSuites.FULL_PREFERRED_ORDER_IANA) {
+            listOf("Cipher suite '$negotiated' is not in the allowed list")
+        } else {
+            emptyList()
         }
-        return TlsValidationResult(errors.isEmpty(), errors, warnings)
+        return TlsValidationResult(errors.isEmpty(), errors, emptyList())
     }
 
     public fun validateNegotiatedProtocol(protocol: String): TlsValidationResult {
@@ -53,17 +54,28 @@ public object ZetaTlsValidator {
     }
 
     public fun validateEnabledCipherSuites(enabled: List<String>): TlsValidationResult {
-        if (enabled.isEmpty()) return TlsValidationResult(true, emptyList(), emptyList())
-        val errors = mutableListOf<String>()
-        val warnings = mutableListOf<String>()
         val normalizedEnabled = enabled.map { it.toOpenSslName() }.toSet()
-
-        ZetaCipherSuites.REQUIRED_TLS_1_2.forEach { required ->
+        val errors = ZetaCipherSuites.REQUIRED_TLS_1_2.mapNotNull { required ->
             if (required !in normalizedEnabled && required.toOpenSslName() !in normalizedEnabled) {
-                errors += "Required cipher suite missing: $required"
+                "Required cipher suite missing: $required"
+            } else {
+                null
             }
         }
-        return TlsValidationResult(errors.isEmpty(), errors, warnings)
+        return TlsValidationResult(errors.isEmpty(), errors, emptyList())
+    }
+
+    private fun validateNegotiatedCurve(curve: String): TlsValidationResult {
+        val allowed = ZetaTlsCurves.ALLOWED
+        return if (curve in allowed) {
+            TlsValidationResult(isCompliant = true, errors = emptyList(), warnings = emptyList())
+        } else {
+            TlsValidationResult(
+                isCompliant = false,
+                errors = listOf("Negotiated curve '$curve' is not in the allowed list: $allowed"),
+                warnings = emptyList(),
+            )
+        }
     }
 
     public fun validateAll(
@@ -92,10 +104,12 @@ public object ZetaTlsValidator {
     public fun validateHandshake(
         negotiatedCipher: String?,
         negotiatedProtocol: String?,
+        negotiatedCurve: String?,
     ): TlsValidationResult {
         val results = buildList {
             if (negotiatedCipher != null) add(validateNegotiatedCipherSuite(negotiatedCipher))
             if (negotiatedProtocol != null) add(validateNegotiatedProtocol(negotiatedProtocol))
+            if (negotiatedCurve != null) add(validateNegotiatedCurve(negotiatedCurve))
         }
         return TlsValidationResult(
             isCompliant = results.all { it.isCompliant },
@@ -113,4 +127,17 @@ public fun String.toOpenSslName(): String {
         .replace("_", "-")
         .replace("AES-128-", "AES128-")
         .replace("AES-256-", "AES256-")
+}
+
+public fun sanMatchesHost(san: String, host: String): Boolean {
+    if (san.lowercase() == host.lowercase()) return true
+
+    if (san.startsWith("*.")) {
+        val sanSuffix = san.removePrefix("*.")
+        if (host.endsWith(".$sanSuffix", ignoreCase = true)) {
+            val prefix = host.dropLast(sanSuffix.length + 1)
+            return prefix.isNotEmpty() && "." !in prefix
+        }
+    }
+    return false
 }

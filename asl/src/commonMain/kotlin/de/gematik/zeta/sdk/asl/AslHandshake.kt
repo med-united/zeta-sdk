@@ -24,6 +24,9 @@
 
 package de.gematik.zeta.sdk.asl
 
+import de.gematik.zeta.sdk.asl.vau.AslContext
+import de.gematik.zeta.sdk.asl.vau.HttpContext
+import de.gematik.zeta.sdk.asl.vau.KemBundle
 import de.gematik.zeta.sdk.asl.vau.buildMessage1
 import de.gematik.zeta.sdk.asl.vau.buildMessage3
 import de.gematik.zeta.sdk.asl.vau.computeTranscriptHash
@@ -59,6 +62,7 @@ public data class AslHandshakeState(
     val accessTokenProvider: AccessTokenProvider,
     val tpmProvider: TpmProvider,
     val tlsValidation: Boolean = true,
+    val resource: String,
 ) {
     public companion object {
         public fun create(
@@ -67,6 +71,7 @@ public data class AslHandshakeState(
             accessTokenProvider: AccessTokenProvider,
             tpmProvider: TpmProvider,
             tlsValidation: Boolean,
+            resource: String,
         ): AslHandshakeState {
             return AslHandshakeState(
                 request = request,
@@ -76,6 +81,7 @@ public data class AslHandshakeState(
                 accessTokenProvider = accessTokenProvider,
                 tpmProvider = tpmProvider,
                 tlsValidation = tlsValidation,
+                resource = resource,
             )
         }
     }
@@ -100,11 +106,17 @@ public suspend fun AslHandshakeState.performMessage1AndReceiveMessage2(): AslHan
 }
 
 @OptIn(ExperimentalSerializationApi::class)
-public suspend fun AslHandshakeState.processMessage2AndBuildMessage3(aslProdEnvironment: Boolean): AslHandshakeState {
+public suspend fun AslHandshakeState.processMessage2AndBuildMessage3(aslProdEnvironment: Boolean, requiredRoleOid: String): AslHandshakeState {
     requireNotNull(message1) { "Message 1 must be present before processing Message 2" }
     requireNotNull(message1Result) { "Message 1 result must be present before processing Message 2" }
 
-    val m3Result = processMessage2AndDeriveMessage3(message1, message1Result, mlKem, ecdhKem, httpClient, request, aslProdEnvironment, tlsValidation)
+    val m3Result = processMessage2AndDeriveMessage3(
+        message1 = message1,
+        resultMessage1 = message1Result,
+        kem = KemBundle(mlKem, ecdhKem),
+        http = HttpContext(httpClient, request, tlsValidation),
+        asl = AslContext(aslProdEnvironment, requiredRoleOid),
+    )
 
     val keyConfCipherText = encryptKeyConfirmation(
         m3Result.k2.clientToServerConfirmationKey,
@@ -168,7 +180,7 @@ public suspend fun AslHandshakeState.applyDpopFor(method: String, targetUrl: Str
     val token = auth.removePrefix(HttpAuthHeaders.Dpop).trim()
 
     val hashed = accessTokenProvider.hash(token)
-    val dpopKey = tpmProvider.generateDpopKey()
+    val dpopKey = tpmProvider.generateDpopKey(resource)
     return accessTokenProvider.createDpopToken(dpopKey.jwk, method, targetUrl, null, hashed)
 }
 

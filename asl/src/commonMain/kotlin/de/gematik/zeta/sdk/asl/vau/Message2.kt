@@ -46,52 +46,48 @@ import de.gematik.zeta.sdk.crypto.EcPointP256
 import de.gematik.zeta.sdk.crypto.EcdhSigner
 import de.gematik.zeta.sdk.crypto.Hkdf
 import de.gematik.zeta.sdk.crypto.Kem
-import de.gematik.zeta.sdk.crypto.OcspHandler
+import de.gematik.zeta.sdk.crypto.OcspHandlerImpl
 import de.gematik.zeta.sdk.crypto.X509CertValidator
 import de.gematik.zeta.sdk.crypto.hashWithSha256
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
+import de.gematik.zeta.sdk.network.http.client.config.tls.sanMatchesHost
+import de.gematik.zeta.sdk.network.http.client.hostOf
 import io.ktor.client.request.HttpRequestBuilder
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlin.time.Clock
-
-internal object AslConstants {
-    const val OID_EPA_VAU = "1.2.276.0.76.4.261"
-}
 
 @Suppress("UnsafeCallOnNullableType")
 @OptIn(ExperimentalSerializationApi::class)
 internal suspend fun processMessage2AndDeriveMessage3(
     message1: Message1Bundle,
     resultMessage1: Message1Result,
-    mlKem: Kem,
-    ecdhKem: Kem,
-    httpClient: ZetaHttpClient,
-    httpRequest: HttpRequestBuilder,
-    aslProdEnvironment: Boolean,
-    tlsValidation: Boolean = true,
+    kem: KemBundle,
+    http: HttpContext,
+    asl: AslContext,
 ): Message3Result {
     val message2 = parseMessage2(resultMessage1.response)
-    val ssE = deriveSharedSecret(mlKem, ecdhKem, message1.keys, message2)
+    val ssE = deriveSharedSecret(kem.mlKem, kem.ecdhKem, message1.keys, message2)
     val (k1_c2s, k1_s2c) = deriveSharedKeys(ssE)
     val signed = decryptSignedKeys(k1_s2c, message2.aeadCiphertext!!)
 
-    if (tlsValidation) {
+    if (http.tlsValidation) {
         Log.i { "Starting Certificate / OCSP validation" }
+        val tiEnvironment = if (asl.prodEnvironment) AslTiRootStore.TiEnvironment.PRODUCTION else AslTiRootStore.TiEnvironment.REFERENCE
         validateSignedVauPublicKeys(
             signed = signed,
-            certChainValidator = X509CertValidator(),
-            ocspValidator = OcspHandler(),
-            ecdhSigner = EcdhSigner(),
-            tiTrustAnchors = AslTiRootStore(httpClient).getTrustAnchors(Clock.System),
-            certDataFetcher = HttpCertDataFetcher(httpClient, httpRequest),
-            httpClient = httpClient,
-            environment = if (aslProdEnvironment) Environment.Production else Environment.Testing,
+            validation = CertValidationBundle(
+                http = http,
+                certDataFetcher = HttpCertDataFetcher(http.client, http.request),
+                tiTrustAnchors = AslTiRootStore(http.client, tiEnvironment).getTrustAnchors(Clock.System),
+            ),
+            environment = if (asl.prodEnvironment) Environment.Production else Environment.Testing,
+            requiredRoleOid = asl.requiredRoleOid,
         )
     } else {
         Log.i { "Certificate / OCSP validation disabled" }
     }
 
-    val encaps = encapsulateForServer(mlKem, ecdhKem, signed)
+    val encaps = encapsulateForServer(kem.mlKem, kem.ecdhKem, signed)
     val inner = buildM3InnerLayer(encaps)
 
     val innerCipherText = encryptInnerLayer(k1_c2s, inner)
@@ -129,10 +125,10 @@ public fun EcPointP256.Companion.fromKemBytes(bytes: ByteArray): EcPointP256 {
 }
 
 public fun deriveSharedSecret(ml768Kem: Kem, ecdhKem: Kem, keys: VauPairKeys, message2: Message2): ByteArray {
-    val ss_e_ec = ecdhKem.decapsulate(keys.ecdhKey.privateKey, message2.ecdhCiphertext.toUncompressedPoint())
-    val ss_e_ml = ml768Kem.decapsulate(keys.ml768Key.privateKey, message2.ml768Ciphertext)
+    val sharedSecreteEphemeralEc = ecdhKem.decapsulate(keys.ecdhKey.privateKey, message2.ecdhCiphertext.toUncompressedPoint())
+    val sharedSecreteEphemeralMl = ml768Kem.decapsulate(keys.ml768Key.privateKey, message2.ml768Ciphertext)
 
-    return ss_e_ec + ss_e_ml
+    return sharedSecreteEphemeralEc + sharedSecreteEphemeralMl
 }
 
 public fun deriveSharedKeys(ephemeralSharedSecret: ByteArray): Pair<ByteArray, ByteArray> {
@@ -142,10 +138,10 @@ public fun deriveSharedKeys(ephemeralSharedSecret: ByteArray): Pair<ByteArray, B
         info = ByteArray(0),
         outLen = 64,
     )
-    val k1_c2s = k1All.copyOfRange(0, 32)
-    val k1_s2c = k1All.copyOfRange(32, 64)
+    val k1Client2Server = k1All.copyOfRange(0, 32)
+    val k1Server2Client = k1All.copyOfRange(32, 64)
 
-    return k1_c2s to k1_s2c
+    return k1Client2Server to k1Server2Client
 }
 
 @OptIn(ExperimentalSerializationApi::class)
@@ -197,9 +193,9 @@ public fun buildM3InnerLayer(encaps: EncapsulationResult): M3InnerLayer =
     )
 
 @OptIn(ExperimentalSerializationApi::class)
-public fun encryptInnerLayer(k1_c2s: ByteArray, inner: M3InnerLayer): ByteArray {
+public fun encryptInnerLayer(k1Client2Server: ByteArray, inner: M3InnerLayer): ByteArray {
     val innerCbor = cbor.encodeToByteArray(M3InnerLayer.serializer(), inner)
-    return AesGcmCipherImpl().encrypt(k1_c2s, innerCbor)
+    return AesGcmCipherImpl().encrypt(k1Client2Server, innerCbor)
 }
 
 @OptIn(ExperimentalSerializationApi::class)
@@ -214,20 +210,15 @@ public fun encryptKeyConfirmation(clientToServerConfirmationKey: ByteArray, tran
 @OptIn(ExperimentalSerializationApi::class)
 internal suspend fun validateSignedVauPublicKeys(
     signed: SignedVauPublicKeys,
-    certDataFetcher: AslCertDataApi,
-    certChainValidator: X509CertValidator,
-    ocspValidator: OcspHandler,
-    ecdhSigner: EcdhSigner,
-    tiTrustAnchors: List<ByteArray>,
-    httpClient: ZetaHttpClient,
+    validation: CertValidationBundle,
     clock: Clock = Clock.System,
     environment: Environment = Environment.Production,
+    requiredRoleOid: String,
 ) {
     val vauKeys = cbor.decodeFromByteArray(VauKeys.serializer(), signed.signedPublicKeys)
     val nowEpoch = clock.now().epochSeconds
-    require(vauKeys.expiresAt > nowEpoch) {
-        "ASL keys expired: expiresAt=${vauKeys.expiresAt}, now=$nowEpoch"
-    }
+
+    validateVauKeyLifetime(vauKeys.expiresAt, vauKeys.issuedAt, nowEpoch)
 
     require(vauKeys.ecdhPublicKey.crv == "P-256") {
         "ECDH key must use P-256, got ${vauKeys.ecdhPublicKey.crv}"
@@ -242,9 +233,13 @@ internal suspend fun validateSignedVauPublicKeys(
 
     val certHashHex = signed.certificateHash.toHexString()
     Log.i { "version: ${signed.certificateDescriptionVersion} hash: ${signed.certificateHash.toHexString()}" }
-    val certData = certDataFetcher.fetch(certHashHex, signed.certificateDescriptionVersion)
+    val certData = validation.certDataFetcher.fetch(certHashHex, signed.certificateDescriptionVersion)
 
-    certChainValidator.checkValidity(certData.cert)
+    val resourceHost = hostOf(validation.http.request.url.toString())
+
+    validateSan(certData.cert, resourceHost, validation.certChainValidator)
+
+    validation.certChainValidator.checkValidity(certData.cert)
 
     val chain = buildList {
         add(certData.cert)
@@ -252,34 +247,94 @@ internal suspend fun validateSignedVauPublicKeys(
         addAll(certData.rcaChain.filter { it.isNotEmpty() })
     }
 
-    if (tiTrustAnchors.isNotEmpty() && chain.size > 1) {
-        certChainValidator.validateCertChain(chain, tiTrustAnchors)
-    } else {
-        Log.w { "Skipping chain validation: tiTrustAnchors=${tiTrustAnchors.size}, chain.size=${chain.size}" }
+    if (validation.tiTrustAnchors.isEmpty()) {
+        error("Chain validation aborted: no TI trust anchors loaded")
+    }
+    if (chain.size <= 1) {
+        error("Chain validation aborted: incomplete chain (size=${chain.size})")
     }
 
-    if (environment == Environment.Production) {
-        Log.i { "Production environment - checking extended key usage (${AslConstants.OID_EPA_VAU})" }
-        val extendedKeyUsage = require(AslConstants.OID_EPA_VAU in certChainValidator.getExtendedKeyUsage(certData.cert))
-        Log.i { "Certificate extended key usage: $extendedKeyUsage" }
+    validation.certChainValidator.validateCertChain(chain, validation.tiTrustAnchors)
+
+    val certRoleOids = validation.certChainValidator.getProfessionOids(certData.cert)
+    require(requiredRoleOid in certRoleOids) {
+        "TI certificate missing required Role-OID: required=$requiredRoleOid, " +
+            "present=${certRoleOids.joinToString()}"
     }
+    Log.i { "Role-OID validated: $requiredRoleOid" }
 
     validateRevocation(
         stapledOcspResponse = signed.ocspResponse.takeIf { it.isNotEmpty() },
         certDer = certData.cert,
         issuerDer = certData.ca,
-        ocspValidator = ocspValidator,
-        httpClient = httpClient,
+        ocspValidator = validation.ocspValidator,
+        httpClient = validation.http.client,
         maxOcspAgeSeconds = 24 * 3600,
         allowSkipForTestCertificates = environment != Environment.Production,
     )
 
-    val signingPubKey = certChainValidator.getPublicKey(certData.cert)
+    val signingPubKey = validation.certChainValidator.getPublicKey(certData.cert)
     require(
-        ecdhSigner.verify(
+        validation.ecdhSigner.verify(
             publicKey = signingPubKey,
             data = signed.signedPublicKeys,
             signature = signed.es256Signature,
         ),
     ) { "ES256 signature invalid for signed_pub_keys" }
 }
+
+public const val SECONDS_PER_DAY: Int = 60 * 60 * 24
+private const val MAX_KEY_LIFETIME_DAYS = 30
+public const val MAX_KEY_LIFETIME_SECONDS: Int = MAX_KEY_LIFETIME_DAYS * SECONDS_PER_DAY
+
+internal fun validateVauKeyLifetime(
+    expiresAt: Long,
+    issuedAt: Long,
+    nowEpochSeconds: Long,
+) {
+    require(expiresAt > nowEpochSeconds) {
+        "ASL keys expired: expiresAt=$expiresAt, now=$nowEpochSeconds"
+    }
+
+    val actualLifetimeSeconds = expiresAt - issuedAt
+    require(actualLifetimeSeconds <= MAX_KEY_LIFETIME_SECONDS) {
+        "ASL keys lifetime exceeds $MAX_KEY_LIFETIME_DAYS days: " +
+            "issuedAt=$issuedAt, expiresAt=$expiresAt, " +
+            "lifetimeDays=${actualLifetimeSeconds / SECONDS_PER_DAY}"
+    }
+}
+
+internal fun validateSan(
+    certDer: ByteArray,
+    host: String,
+    certChainValidator: X509CertValidator,
+) {
+    val sanDnsNames = certChainValidator.getSanDnsNames(certDer)
+
+    require(sanDnsNames.any { san -> sanMatchesHost(san, host) }) {
+        "ASL certificate SAN does not match resource host: host=$host, SANs=$sanDnsNames"
+    }
+    Log.i { "ASL certificate SAN validated: host=$host matched in $sanDnsNames" }
+}
+
+internal data class KemBundle(val mlKem: Kem, val ecdhKem: Kem)
+
+internal data class HttpContext(
+    val client: ZetaHttpClient,
+    val request: HttpRequestBuilder,
+    val tlsValidation: Boolean = true,
+)
+
+internal data class AslContext(
+    val prodEnvironment: Boolean,
+    val requiredRoleOid: String,
+)
+
+internal data class CertValidationBundle(
+    val http: HttpContext,
+    val certDataFetcher: AslCertDataApi,
+    val certChainValidator: X509CertValidator = X509CertValidator(),
+    val ocspValidator: OcspHandlerImpl = OcspHandlerImpl(),
+    val ecdhSigner: EcdhSigner = EcdhSigner(),
+    val tiTrustAnchors: List<ByteArray>,
+)

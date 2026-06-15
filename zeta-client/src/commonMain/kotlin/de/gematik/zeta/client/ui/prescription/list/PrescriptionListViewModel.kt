@@ -30,6 +30,7 @@ import de.gematik.zeta.client.di.DIContainer
 import de.gematik.zeta.client.model.PrescriptionModel
 import de.gematik.zeta.client.ui.common.mvi.MviState
 import de.gematik.zeta.client.ui.common.mvi.MviViewModel
+import de.gematik.zeta.sdk.SdkStatus
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,13 +59,27 @@ public class PrescriptionListViewModel(
         state.update { PrescriptionListState.Result(list) }
     }
 
+    internal fun statusSdk() = launch(ioDispatcher) {
+        val status = repository.status()
+        state.update { PrescriptionListState.StatusResult(status) }
+    }
+
+    internal fun logoutAuthorization() = launch(ioDispatcher) {
+        repository.logoutAuthorization()
+        state.update { PrescriptionListState.Result(list) }
+    }
     internal fun deletePrescription(model: PrescriptionModel) = launch(ioDispatcher) {
         repository.deletePrescription(model.id ?: -1)
         list = repository.prescriptionList()
+        state.update { PrescriptionListState.Result(list) }
+    }
+
+    internal fun dismissStatus() {
         state.update { PrescriptionListState.Result(list) }
     }
 }
 
 public sealed class PrescriptionListState : MviState {
     public data class Result(val result: List<PrescriptionModel>) : PrescriptionListState()
+    public data class StatusResult(val status: SdkStatus) : PrescriptionListState()
 }

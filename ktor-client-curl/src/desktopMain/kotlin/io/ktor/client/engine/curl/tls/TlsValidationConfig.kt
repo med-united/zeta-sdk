@@ -28,6 +28,7 @@ data class TlsSessionData(
     val protocol: String?,
     val cipherSuite: String?,
     val leafCertInfo: LeafCertInfo?,
+    val host: String? = null,
 )
 
 data class TlsValidationConfig(

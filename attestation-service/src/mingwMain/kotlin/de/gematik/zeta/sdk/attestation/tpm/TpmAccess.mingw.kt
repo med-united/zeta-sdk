@@ -47,7 +47,9 @@ actual class TpmAccess actual constructor() {
         TODO(IMPLEMENT_PENDING)
     }
 
-    actual fun resetPCR(pcrIndex: Int) {}
+    actual fun resetPCR(pcrIndex: Int) {
+        TODO(IMPLEMENT_PENDING)
+    }
 
     actual fun removeAttestationKey() {
         TODO(IMPLEMENT_PENDING)

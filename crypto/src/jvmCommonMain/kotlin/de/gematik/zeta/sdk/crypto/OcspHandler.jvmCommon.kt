@@ -32,7 +32,6 @@ import org.bouncycastle.asn1.x509.AuthorityInformationAccess
 import org.bouncycastle.asn1.x509.CRLDistPoint
 import org.bouncycastle.asn1.x509.DistributionPointName
 import org.bouncycastle.asn1.x509.Extension
-import org.bouncycastle.asn1.x509.Extensions
 import org.bouncycastle.asn1.x509.GeneralName
 import org.bouncycastle.asn1.x509.GeneralNames
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
@@ -45,13 +44,12 @@ import org.bouncycastle.cert.ocsp.RevokedStatus
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.bouncycastle.operator.jcajce.JcaContentVerifierProviderBuilder
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder
-import java.security.SecureRandom
 import java.security.Security
 import java.security.cert.CertificateFactory
 import java.security.cert.X509CRL
 import java.security.cert.X509Certificate
 
-actual class OcspHandler actual constructor() {
+actual class OcspHandlerImpl actual constructor() : OcspHandler {
     init {
         if (Security.getProvider("BC") == null) {
             Security.addProvider(BouncyCastleProvider())
@@ -61,11 +59,11 @@ actual class OcspHandler actual constructor() {
     private fun parse(der: ByteArray): X509Certificate =
         cf.generateCertificate(der.inputStream()) as X509Certificate
 
-    actual fun getProducedAtEpochSeconds(ocspResponseDer: ByteArray): Long {
+    actual override fun getProducedAtEpochSeconds(ocspResponseDer: ByteArray): Long {
         val basicResp = OCSPResp(ocspResponseDer).responseObject as BasicOCSPResp
         return basicResp.producedAt.toInstant().epochSecond
     }
-    actual fun validate(
+    actual override fun validate(
         ocspResponseDer: ByteArray,
         certDer: ByteArray,
         issuerDer: ByteArray,
@@ -121,7 +119,7 @@ actual class OcspHandler actual constructor() {
         Log.i { "OCSP: Certificate status: OK" }
     }
 
-    actual suspend fun prepareOcspRequest(
+    actual override suspend fun prepareOcspRequest(
         certDer: ByteArray,
         issuerDer: ByteArray,
     ): OcspRequestData {
@@ -142,7 +140,7 @@ actual class OcspHandler actual constructor() {
         val issuerHolder = JcaX509CertificateHolder(issuer)
 
         val certId = CertificateID(
-            digestCalcProvider.get(CertificateID.HASH_SHA1),
+            digestCalcProvider[CertificateID.HASH_SHA1],
             issuerHolder,
             certHolder.serialNumber,
         )
@@ -162,7 +160,7 @@ actual class OcspHandler actual constructor() {
         )
     }
 
-    actual fun extractCrlUrl(certDer: ByteArray): String? {
+    actual override fun extractCrlUrl(certDer: ByteArray): String? {
         val cf = CertificateFactory.getInstance("X.509", "BC")
         val cert = cf.generateCertificate(certDer.inputStream()) as X509Certificate
 
@@ -192,7 +190,7 @@ actual class OcspHandler actual constructor() {
         }
     }
 
-    actual fun validateCrl(
+    actual override fun validateCrl(
         crlDer: ByteArray,
         certDer: ByteArray,
         issuerDer: ByteArray,

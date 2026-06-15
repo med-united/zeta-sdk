@@ -25,6 +25,7 @@
 package de.gematik.zeta.sdk.storage
 
 import com.russhwolf.settings.Settings
+import de.gematik.zeta.logging.Log
 import de.gematik.zeta.sdk.crypto.AesGcmCipher
 import kotlin.io.encoding.Base64
 
@@ -34,8 +35,7 @@ class EncryptedSettings(
     cipherB64Key: String,
     private val version: Byte = 1,
 ) : Settings by delegate {
-
-    private val aesKey = Base64.decode(cipherB64Key)
+    private val aesKey = validateAesKey(cipherB64Key)
 
     override fun putString(key: String, value: String) {
         val ct = cipher.encrypt(aesKey, value.encodeToByteArray())
@@ -46,26 +46,49 @@ class EncryptedSettings(
     override fun getString(key: String, defaultValue: String): String {
         val stored = delegate.getString(key, "")
         if (stored.isEmpty()) return defaultValue
+        val decrypted = decryptStored(key, stored)
+        return decrypted.ifEmpty { defaultValue }
+    }
 
+    override fun getStringOrNull(key: String): String? {
+        val stored = delegate.getStringOrNull(key) ?: return null
+        if (stored.isBlank()) return null
+        val decrypted = decryptStored(key, stored)
+        return decrypted.ifEmpty { null }
+    }
+
+    private fun decryptStored(key: String, stored: String): String =
         runCatching {
             val packed = Base64.decode(stored)
             require(packed.isNotEmpty()) { "Corrupt ciphertext" }
             require(packed[0] == 1.toByte()) { "Unsupported version ${packed[0]}" }
             val ct = packed.copyOfRange(1, packed.size)
-            return cipher.decrypt(aesKey, ct).decodeToString()
+            cipher.decrypt(aesKey, ct).decodeToString()
         }.onFailure {
-            delegate.putString(key, stored)
-        }
-
-        return stored
-    }
+            Log.w { "SDK storage: The key $key could not be decrypted. " }
+            delegate.remove(key)
+        }.getOrElse { "" }
 }
 
-expect fun provideSdkStorage(aesB64Key: String): SdkStorage
+expect fun provideSdkStorage(config: StorageConfig.Default): SdkStorage
 
 interface SecretStore {
     fun put(name: String, value: String)
     fun get(name: String): String?
     fun remove(name: String)
     fun clearNamespace()
+}
+fun validateAesKey(aesB64Key: String): ByteArray {
+    require(aesB64Key.isNotBlank()) {
+        "aesB64Key must be provided."
+    }
+    val keyBytes = runCatching {
+        Base64.decode(aesB64Key)
+    }.getOrElse {
+        error("aesB64Key must be a valid Base64 string")
+    }
+    require(keyBytes.size == 32) {
+        "aesB64Key must decode to exactly 32 bytes (AES-256), got ${keyBytes.size}"
+    }
+    return keyBytes
 }

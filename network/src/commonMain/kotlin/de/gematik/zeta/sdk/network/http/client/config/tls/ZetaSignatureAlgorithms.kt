@@ -29,27 +29,14 @@ public object ZetaSignatureAlgorithms {
         "ecdsa_secp256r1_sha256",
         "ecdsa_secp384r1_sha384",
         "ecdsa_secp521r1_sha512",
-    )
-
-    public val ALLOWED_WITH_RSA: List<String> = ALLOWED + listOf(
-        "rsa_pss_rsae_sha256",
-        "rsa_pss_rsae_sha384",
-        "rsa_pss_rsae_sha512",
-    )
-
-    public val ALLOWED_OPENSSL_NAMES: Set<String> = setOf(
-        "RSA-SHA256",
-        "ecdsa-with-SHA256",
-        "ecdsa-with-SHA384",
+        "rsa_pkcs1_sha256", // Required for certificate chain validation
     )
 
     public val FORBIDDEN_HASH_FUNCTIONS: List<String> = listOf(
         "sha1", "md5", "sha224",
     )
 
-    public val ALLOWED_KEY_ALGORITHMS: Set<String> = setOf("RSA", "EC")
-
-    public const val MIN_RSA_KEY_BITS: Int = 2048
+    public val ALLOWED_KEY_ALGORITHMS: Set<String> = setOf("EC")
 
     public const val MIN_EC_KEY_BITS: Int = 256
 }

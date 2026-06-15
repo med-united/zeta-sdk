@@ -1,5 +1,5 @@
 @file:OptIn(ExperimentalNativeApi::class, ExperimentalForeignApi::class)
-@file:Suppress("FunctionNaming", "NoNameShadowing")
+@file:Suppress("FunctionNaming")
 /*
  * #%L
  * ZETA-Client
@@ -26,190 +26,237 @@
 
 package de.gematik.zeta.sdk
 
-import de.gematik.zeta.platform.Platform
-import de.gematik.zeta.platform.platform
-import de.gematik.zeta.sdk.attestation.model.PlatformProductId
-import de.gematik.zeta.sdk.authentication.AuthConfig
-import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
-import de.gematik.zeta.sdk.authentication.smcb.SmcbTokenProvider
-import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
-import de.gematik.zeta.sdk.storage.InMemoryStorage
-import interop.ZetaSdk_BuildConfig
-import interop.ZetaSdk_Client
+import de.gematik.zeta.sdk.network.http.client.HttpClientAsync.patch
+import de.gematik.zeta.sdk.network.http.client.HttpClientAsync.post
+import de.gematik.zeta.sdk.network.http.client.HttpClientAsync.put
+import de.gematik.zeta.sdk.network.http.client.HttpClientSync.delete
+import de.gematik.zeta.sdk.network.http.client.HttpClientSync.get
+import de.gematik.zeta.sdk.network.http.client.HttpClientSync.head
+import de.gematik.zeta.sdk.network.http.client.HttpClientSync.options
+import de.gematik.zeta.sdk.network.http.client.HttpClientSync.patch
+import de.gematik.zeta.sdk.network.http.client.HttpClientSync.post
+import de.gematik.zeta.sdk.network.http.client.HttpClientSync.put
+import de.gematik.zeta.sdk.network.http.client.HttpResponseWrapper
+import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import interop.ZetaSdk_HttpClient
 import interop.ZetaSdk_HttpHeader
+import interop.ZetaSdk_HttpRequest
 import interop.ZetaSdk_HttpResponse
-import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logger
 import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.CFunction
 import kotlinx.cinterop.CPointer
-import kotlinx.cinterop.CPointerVar
 import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.StableRef
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.asStableRef
 import kotlinx.cinterop.get
+import kotlinx.cinterop.invoke
+import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.nativeHeap
 import kotlinx.cinterop.pointed
 import kotlinx.cinterop.ptr
+import kotlinx.cinterop.toCValues
 import kotlinx.cinterop.toKString
-import platform.posix.free
-import kotlin.collections.orEmpty
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.launch
+import platform.posix.strdup
 import kotlin.experimental.ExperimentalNativeApi
 
-private var disableServerValidation: Boolean = false
+private fun CPointer<ZetaSdk_HttpClient>.client() =
+    pointed.zetaHttpClient!!.asStableRef<ZetaHttpClient>().get()
 
-@CName(externName = "ZetaSdk_buildZetaClient")
-fun ZetaSdk_buildSdkClient(
-    buildConfig: CPointer<ZetaSdk_BuildConfig>,
-    disableTlsValidation: Boolean = false,
-): CPointer<ZetaSdk_Client> {
-    disableServerValidation = disableTlsValidation
+private fun ZetaSdk_HttpRequest.parseHeaders(): Map<String, String> =
+    headers?.toKList(headersCount)?.associate {
+        (it?.key?.toKString() ?: "") to (it?.value?.toKString() ?: "")
+    } ?: emptyMap()
 
-    val cBuildConfig = buildConfig.pointed
-    val cStorageConfig = cBuildConfig.storageConfig!!.pointed
-    val cTpmConfig = cBuildConfig.tpmConfig!!.pointed
-    val cAuthConfig = cBuildConfig.authConfig!!.pointed
-    val cSmbConfig = cAuthConfig.smbConfig?.pointed
-    val cSmcbConfig = cAuthConfig.smcbConfig?.pointed
-
-    val storageConfig = cStorageConfig.let { _ ->
-        StorageConfig(InMemoryStorage())
+private fun HttpResponseWrapper.toNative(): CPointer<ZetaSdk_HttpResponse> {
+    val resultHeaders = nativeHeap.allocArray<ZetaSdk_HttpHeader>(headers.size)
+    headers.entries.forEachIndexed { index, (key, value) ->
+        resultHeaders[index].key = strdup(key)!!
+        resultHeaders[index].value = strdup(value)!!
     }
-    val tpmConfig = cTpmConfig.let { _ ->
-        object : TpmConfig {}
-    }
-    val authConfig = cAuthConfig.let { authConfig ->
-        val keystoreFile = cSmbConfig?.keystoreFile?.toKString() ?: ""
-        val baseUrl = cSmcbConfig?.baseUrl?.toKString() ?: ""
-
-        val subjectTokenProvider = when {
-            keystoreFile.isNotEmpty() -> SmbTokenProvider(
-                SmbTokenProvider.Credentials(
-                    keystoreFile,
-                    cSmbConfig?.alias?.toKString() ?: "",
-                    cSmbConfig?.password?.toKString() ?: "",
-                ),
-            )
-
-            baseUrl.isNotEmpty() -> SmcbTokenProvider(
-                SmcbTokenProvider.ConnectorConfig(
-                    baseUrl,
-                    cSmcbConfig?.mandantId?.toKString() ?: "",
-                    cSmcbConfig?.clientSystemId?.toKString() ?: "",
-                    cSmcbConfig?.workspaceId?.toKString() ?: "",
-                    cSmcbConfig?.userId?.toKString() ?: "",
-                    cSmcbConfig?.cardHandle?.toKString() ?: "",
-                ),
-            )
-
-            else -> error("Should specify SM-B / SMC-B subject token provider")
-        }
-        AuthConfig(
-            authConfig.scopes?.toKList(authConfig.scopesCount)?.filterNotNull().orEmpty(),
-            authConfig.exp,
-            authConfig.enableAslTracingHeader,
-            subjectTokenProvider,
-        )
-    }
-    val zetaSdkClient = cBuildConfig.let { buildConfig ->
-        ZetaSdk.build(
-            buildConfig.resource?.toKString() ?: "",
-            BuildConfig(
-                buildConfig.productId?.toKString() ?: "",
-                buildConfig.productVersion?.toKString() ?: "",
-                buildConfig.clientName?.toKString() ?: "",
-                storageConfig,
-                tpmConfig,
-                authConfig,
-                platformProductId = getPlatformProduct(),
-                ZetaHttpClientBuilder()
-                    .disableServerValidation(disableServerValidation)
-                    .logging(
-                        LogLevel.ALL,
-                        object : Logger {
-                            override fun log(message: String) {
-                                println(message)
-                            }
-                        },
-                    ),
-            ),
-        )
-    }
-    return nativeHeap.alloc<ZetaSdk_Client>().let { sdkClient ->
-        sdkClient.zetaSdkClient = StableRef.create(zetaSdkClient).asCPointer()
-        sdkClient.ptr
-    }
+    return nativeHeap.alloc<ZetaSdk_HttpResponse>().apply {
+        status = this@toNative.status
+        body = strdup(this@toNative.body)!!
+        headers = resultHeaders
+        error = null
+    }.ptr
 }
 
-@CName(externName = "ZetaSdk_clearZetaClient")
-fun ZetaSdk_clearZetaClient(
-    sdkClient: CPointer<ZetaSdk_Client>,
-) {
-    sdkClient.pointed.let { sdkClient ->
-        sdkClient.zetaSdkClient!!.asStableRef<ZetaSdkClient>().dispose()
-    }
-    nativeHeap.free(sdkClient.rawValue)
+private fun Exception.toNativeError(): CPointer<ZetaSdk_HttpResponse> {
+    printStackTrace()
+    return nativeHeap.alloc<ZetaSdk_HttpResponse>().apply {
+        body = null
+        error = strdup(message)!!
+    }.ptr
 }
 
-@CName(externName = "ZetaSdk_buildHttpClient")
-fun ZetaSdk_buildHttpClient(
-    sdkClient: CPointer<ZetaSdk_Client>,
-): CPointer<ZetaSdk_HttpClient> {
-    val zetaSdkClient = sdkClient.pointed.zetaSdkClient!!.asStableRef<ZetaSdkClient>().get()
-    val logger = object : Logger {
-        override fun log(message: String) {
-            println(message)
-        }
-    }
-    val zetaHttpClient = zetaSdkClient.httpClient {
-        logging(LogLevel.ALL, logger)
-        disableServerValidation(disableServerValidation)
-    }
-    return nativeHeap.alloc<ZetaSdk_HttpClient>().let { httpClient ->
-        httpClient.zetaHttpClient = StableRef.create(zetaHttpClient).asCPointer()
-        httpClient.ptr
-    }
-}
-
-@CName(externName = "ZetaSdk_clearHttpClient")
-fun ZetaSdk_clearHttpClient(
+private inline fun executeRequest(
     httpClient: CPointer<ZetaSdk_HttpClient>,
-) {
-    httpClient.pointed.let { sdkClient ->
-        sdkClient.zetaHttpClient!!.asStableRef<ZetaSdkClient>().dispose()
-    }
-    nativeHeap.free(httpClient.rawValue)
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+    block: (ZetaHttpClient, ZetaSdk_HttpRequest) -> HttpResponseWrapper,
+): CPointer<ZetaSdk_HttpResponse>? = try {
+    block(httpClient.client(), httpRequest.pointed).toNative()
+} catch (e: Exception) {
+    e.toNativeError()
 }
 
-@CName(externName = "ZetaHttpResponse_destroy")
-fun ZetaHttpResponse_destroy(
-    httpResponse: CPointer<ZetaSdk_HttpResponse>,
+@OptIn(DelicateCoroutinesApi::class)
+private fun executeRequestAsync(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+    onSuccess: CPointer<CFunction<(Int, CPointer<ByteVar>?) -> Unit>>,
+    onError: CPointer<CFunction<(CPointer<ByteVar>?) -> Unit>>,
+    block: suspend (ZetaHttpClient, String, String?, Map<String, String>) -> HttpResponseWrapper,
 ) {
-    httpResponse.pointed.let { httpResponse ->
-        httpResponse.body?.let { free(it) }
-        httpResponse.error?.let { free(it) }
-        httpResponse.headers?.toKList(httpResponse.headersCount)?.forEach {
-            it?.key?.let { free(it) }
-            it?.value?.let { free(it) }
+    val client = httpClient.pointed.zetaHttpClient!!.asStableRef<ZetaHttpClient>().get()
+    val req = httpRequest.pointed
+
+    val url = req.url?.toKString() ?: ""
+    val body = req.body?.toKString()
+    val headers = req.parseHeaders()
+
+    GlobalScope.launch(Dispatchers.IO) {
+        try {
+            val response = block(client, url, body, headers)
+            val bodyBytes = response.body.encodeToByteArray()
+            memScoped {
+                onSuccess.invoke(response.status, bodyBytes.toCValues().ptr)
+            }
+        } catch (e: Exception) {
+            memScoped {
+                onError.invoke((e.message ?: "unknown").encodeToByteArray().toCValues().ptr)
+            }
         }
     }
-    nativeHeap.free(httpResponse.rawValue)
 }
 
-fun CPointer<CPointerVar<ByteVar>>.toKList(count: Int): List<String?> {
-    return List(count) { i -> this[i]?.toKString() }
+@CName(externName = "ZetaHttpClient_get")
+fun ZetaHttpClient_get(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+): CPointer<ZetaSdk_HttpResponse>? = executeRequest(httpClient, httpRequest) { client, req ->
+    client.delegate.get(req.url?.toKString() ?: "", req.parseHeaders())
 }
 
-fun CPointer<ZetaSdk_HttpHeader>.toKList(count: Int): List<ZetaSdk_HttpHeader?> {
-    return List(count) { i -> this[i] }
+@CName(externName = "ZetaHttpClient_post")
+fun ZetaHttpClient_post(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+): CPointer<ZetaSdk_HttpResponse>? = executeRequest(httpClient, httpRequest) { client, req ->
+    client.delegate.post(req.url?.toKString() ?: "", req.body?.toKString() ?: "", req.parseHeaders())
 }
 
-private fun getPlatformProduct(): PlatformProductId {
-    return when (val plat = platform()) {
-        is Platform.Jvm.Macos, Platform.Native.Macos -> PlatformProductId.AppleProductId("apple", "macos", listOf())
-        is Platform.Jvm.Linux, Platform.Native.Linux -> PlatformProductId.LinuxProductId("linux", "", "demo-client", "0.5.0")
-        is Platform.Jvm.Windows, Platform.Native.Windows -> PlatformProductId.WindowsProductId("windows", "", "demo-client")
-        else -> error("Unknown platform: $plat")
-    }
+@CName(externName = "ZetaHttpClient_put")
+fun ZetaHttpClient_put(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+): CPointer<ZetaSdk_HttpResponse>? = executeRequest(httpClient, httpRequest) { client, req ->
+    client.delegate.put(req.url?.toKString() ?: "", req.parseHeaders())
+}
+
+@CName(externName = "ZetaHttpClient_patch")
+fun ZetaHttpClient_patch(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+): CPointer<ZetaSdk_HttpResponse>? = executeRequest(httpClient, httpRequest) { client, req ->
+    client.delegate.patch(req.url?.toKString() ?: "", req.parseHeaders())
+}
+
+@CName(externName = "ZetaHttpClient_options")
+fun ZetaHttpClient_options(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+): CPointer<ZetaSdk_HttpResponse>? = executeRequest(httpClient, httpRequest) { client, req ->
+    client.delegate.options(req.url?.toKString() ?: "", req.parseHeaders())
+}
+
+@CName(externName = "ZetaHttpClient_head")
+fun ZetaHttpClient_head(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+): CPointer<ZetaSdk_HttpResponse>? = executeRequest(httpClient, httpRequest) { client, req ->
+    client.delegate.head(req.url?.toKString() ?: "", req.parseHeaders())
+}
+
+@CName(externName = "ZetaHttpClient_delete")
+fun ZetaHttpClient_delete(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+): CPointer<ZetaSdk_HttpResponse>? = executeRequest(httpClient, httpRequest) { client, req ->
+    client.delegate.delete(req.url?.toKString() ?: "", req.parseHeaders())
+}
+
+@CName(externName = "ZetaHttpClient_getAsync")
+fun ZetaHttpClient_getAsync(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+    onSuccess: CPointer<CFunction<(Int, CPointer<ByteVar>?) -> Unit>>,
+    onError: CPointer<CFunction<(CPointer<ByteVar>?) -> Unit>>,
+) = executeRequestAsync(httpClient, httpRequest, onSuccess, onError) { client, url, _, headers ->
+    client.delegate.get(url, headers)
+}
+
+@CName(externName = "ZetaHttpClient_postAsync")
+fun ZetaHttpClient_postAsync(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+    onSuccess: CPointer<CFunction<(Int, CPointer<ByteVar>?) -> Unit>>,
+    onError: CPointer<CFunction<(CPointer<ByteVar>?) -> Unit>>,
+) = executeRequestAsync(httpClient, httpRequest, onSuccess, onError) { client, url, body, headers ->
+    client.delegate.post(url, body, headers)
+}
+
+@CName(externName = "ZetaHttpClient_putAsync")
+fun ZetaHttpClient_putAsync(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+    onSuccess: CPointer<CFunction<(Int, CPointer<ByteVar>?) -> Unit>>,
+    onError: CPointer<CFunction<(CPointer<ByteVar>?) -> Unit>>,
+) = executeRequestAsync(httpClient, httpRequest, onSuccess, onError) { client, url, body, headers ->
+    client.delegate.put(url, body, headers)
+}
+
+@CName(externName = "ZetaHttpClient_patchAsync")
+fun ZetaHttpClient_patchAsync(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+    onSuccess: CPointer<CFunction<(Int, CPointer<ByteVar>?) -> Unit>>,
+    onError: CPointer<CFunction<(CPointer<ByteVar>?) -> Unit>>,
+) = executeRequestAsync(httpClient, httpRequest, onSuccess, onError) { client, url, body, headers ->
+    client.delegate.patch(url, body, headers)
+}
+
+@CName(externName = "ZetaHttpClient_deleteAsync")
+fun ZetaHttpClient_deleteAsync(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+    onSuccess: CPointer<CFunction<(Int, CPointer<ByteVar>?) -> Unit>>,
+    onError: CPointer<CFunction<(CPointer<ByteVar>?) -> Unit>>,
+) = executeRequestAsync(httpClient, httpRequest, onSuccess, onError) { client, url, _, headers ->
+    client.delegate.delete(url, headers)
+}
+
+@CName(externName = "ZetaHttpClient_optionsAsync")
+fun ZetaHttpClient_optionsAsync(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+    onSuccess: CPointer<CFunction<(Int, CPointer<ByteVar>?) -> Unit>>,
+    onError: CPointer<CFunction<(CPointer<ByteVar>?) -> Unit>>,
+) = executeRequestAsync(httpClient, httpRequest, onSuccess, onError) { client, url, _, headers ->
+    client.delegate.options(url, headers)
+}
+
+@CName(externName = "ZetaHttpClient_headAsync")
+fun ZetaHttpClient_headAsync(
+    httpClient: CPointer<ZetaSdk_HttpClient>,
+    httpRequest: CPointer<ZetaSdk_HttpRequest>,
+    onSuccess: CPointer<CFunction<(Int, CPointer<ByteVar>?) -> Unit>>,
+    onError: CPointer<CFunction<(CPointer<ByteVar>?) -> Unit>>,
+) = executeRequestAsync(httpClient, httpRequest, onSuccess, onError) { client, url, _, headers ->
+    client.delegate.head(url, headers)
 }

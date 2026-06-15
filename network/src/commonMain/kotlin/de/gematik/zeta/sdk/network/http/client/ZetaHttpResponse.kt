@@ -88,41 +88,38 @@ public class ZetaHttpResponse(
     public fun isPlainResponse(): Boolean {
         val path = raw.call.response.request.url.encodedPath
         val ct = raw.call.response.headers[HttpHeaders.ContentType]
-        return !isAslEncryptedResponse(path, ct)
+        return !isAslResponse(path, ct)
     }
 }
 
-public suspend fun HttpResponse.toZetaResponse(): ZetaHttpResponse {
-    this.body<ByteArray>()
-    val attrs = call.attributes
-
+public suspend fun toZetaResponse(response: HttpResponse): ZetaHttpResponse {
+    response.body<ByteArray>()
+    val attrs = response.call.attributes
     Log.d { "Available attributes: ${attrs.allKeys}" }
     Log.d { "Has InnerStatusKey? ${attrs.contains(InnerStatusKey)}" }
-
     val effectiveStatus: Int =
-        attrs.getOrNull(InnerStatusKey) ?: status.value
-
-    Log.d { "Effective status: $effectiveStatus, Raw status: ${status.value}" }
-
+        attrs.getOrNull(InnerStatusKey) ?: response.status.value
+    Log.d { "Effective status: $effectiveStatus, Raw status: ${response.status.value}" }
     val effectiveHeaders: Map<String, String> =
         attrs.getOrNull(InnerHeadersKey)
-            ?: headers.entries().associate { (k, values) ->
+            ?: response.headers.entries().associate { (k, values) ->
                 k to values.joinToString(",")
             }
-
     return ZetaHttpResponse(
-        this,
+        response,
         effectiveHeaders,
         HttpStatusCode.fromValue(effectiveStatus),
     )
 }
-
 public val zetaJson: Json = Json {
     ignoreUnknownKeys = true
     isLenient = true
 }
 
-public fun isAslEncryptedResponse(path: String, contentType: String?): Boolean {
+public fun isAslResponse(path: String, contentType: String?): Boolean {
     return path.lowercase().startsWith("/asl/") &&
-        contentType?.startsWith(ContentType.Application.OctetStream.toString()) == true
+        (
+            contentType?.contains(ContentType.Application.OctetStream.toString(), ignoreCase = true) == true ||
+                contentType?.contains(ContentType.Application.Cbor.toString(), ignoreCase = true) == true
+            )
 }

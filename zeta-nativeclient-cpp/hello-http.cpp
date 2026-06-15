@@ -28,20 +28,40 @@
 #include <iostream>
 #include <regex>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
-    #include "zeta_sdk_api.h"
+#include "zeta_sdk_api.h"
 #else
-    #include "libzeta_sdk_api.h"
+#include "libzeta_sdk_api.h"
 #endif
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-static const char* POPP_HEADER       = "PoPP";
-static const char* API_EREZEPT       = "api/erezept";
-static const char* PRODUCT_ID        = "demo-client";
-static const char* PRODUCT_VERSION   = "0.5.0";
-static const char* CLIENT_NAME       = "sdk-client";
+static const char* POPP_HEADER     = "PoPP";
+static const char* API_EREZEPT     = "api/erezept";
+static const char* PRODUCT_ID      = "ZETA-Test-Client";
+static const char* PRODUCT_VERSION = "1.0.0";
+static const char* CLIENT_NAME     = "cpp-client";
+
+// ── Custom SMC-B connector example ───────────────────────────
+// Uncomment to use a custom SMC-B connector instead of SM-B keystore.
+// Replace the hardcoded values with your actual connector implementation.
+//
+// static const char* SMCB_CERTIFICATE_B64  = "<base64 DER certificate>";
+// static const char* SMCB_SIGNATURE_DER_B64 = "<base64 DER signature>";
+//
+// void my_read_certificate(void* ctx, ZetaSdk_BytesCallback cb, void* cbCtx) {
+//     auto derBytes = base64Decode(SMCB_CERTIFICATE_B64);
+//     cb(cbCtx, derBytes.data(), (int)derBytes.size());
+// }
+//
+// void my_external_authenticate(void* ctx, const char* base64Challenge,
+//                                ZetaSdk_BytesCallback cb, void* cbCtx) {
+//     auto sigBytes = base64Decode(SMCB_SIGNATURE_DER_B64);
+//     cb(cbCtx, sigBytes.data(), (int)sigBytes.size());
+// }
+// ─────────────────────────────────────────────────────────────
 
 void printResponse(const char* method, ZetaSdk_HttpResponse* response) {
     if (response->error == NULL) {
@@ -116,6 +136,11 @@ void runSample(ZetaSdk_HttpClient* zetaHttpClient, char* poppToken) {
     std::cout << "Finish Erezept CRUD Sample\n";
 }
 
+void my_custom_log(void* ctx, const char* level, const char* tag, const char* message) {
+    std::cout << "[" << level << "] [" << (tag ? tag : "Zeta") << "] " << message << "\n";
+    std::cout.flush();
+}
+
 int main() {
     std::cout << "Hello Zeta from C++!\n";
     std::cout.flush();
@@ -131,6 +156,8 @@ int main() {
     char* userId        = std::getenv("SMCB_USER_ID");
     char* cardHandle    = std::getenv("SMCB_CARD_HANDLE");
     char* poppToken     = std::getenv("POPP_TOKEN");
+    char* aesB64Key     = std::getenv("STORAGE_AES_KEY");
+    char* requiredRoleOid = std::getenv("REQUIRED_ROLE_OID");
 
     char* disableTlsValue = std::getenv("DISABLE_SERVER_VALIDATION");
     bool disableTls = disableTlsValue && strcmp(disableTlsValue, "true") == 0;
@@ -140,22 +167,45 @@ int main() {
 
     const char* scopes[] = {"zero:audience"};
 
-    ZetaSdk_StorageConfig storageConfig = {};
+    ZetaSdk_StorageConfig storageConfig = {
+            aesB64Key,
+            nullptr,
+            nullptr,
+    };
+
     ZetaSdk_TpmConfig tpmConfig = {};
     ZetaSdk_SmbConfig smbConfig = { keystoreFile, alias, password };
-    ZetaSdk_SmcbConfig smcbConfig = { baseUrl, mandantId, clientSystemId, workspaceId, userId, cardHandle };
+
+    // To use a custom SMC-B connector instead, replace smbConfig and smcbConfig with:
+    // ZetaSdk_SmbConfig  smbConfig  = { nullptr, nullptr, nullptr };
+    // ZetaSdk_SmcbVTable smcbVTable = { nullptr, my_read_certificate, my_external_authenticate };
+    // ZetaSdk_SmcbConfig smcbConfig = { .customSmcb = &smcbVTable };
+    ZetaSdk_SmcbConfig smcbConfig = {};
+
     ZetaSdk_AuthConfig authConfig = {
-            const_cast<char**>(scopes), ARRAY_SIZE(scopes), 30, aslProd, &smbConfig, &smcbConfig
+            const_cast<char**>(scopes), ARRAY_SIZE(scopes),
+            30, aslProd,
+            &smbConfig, &smcbConfig,
+            requiredRoleOid
     };
+
+    // Custom log callback
+    ZetaSdk_LogVTable logVTable = {
+            nullptr,
+            my_custom_log,
+            ZETA_LOG_LEVEL_DEBUG
+    };
+
     ZetaSdk_BuildConfig buildConfig = {
             resource,
             const_cast<char*>(PRODUCT_ID),
             const_cast<char*>(PRODUCT_VERSION),
             const_cast<char*>(CLIENT_NAME),
-            &storageConfig, &tpmConfig, &authConfig
+            &storageConfig, &tpmConfig, &authConfig,
+            &logVTable
     };
 
-    ZetaSdk_Client* zetaSdkClient = (ZetaSdk_Client*)ZetaSdk_buildZetaClient(&buildConfig, disableTls);
+    ZetaSdk_Client*     zetaSdkClient  = (ZetaSdk_Client*)ZetaSdk_buildZetaClient(&buildConfig, disableTls);
     ZetaSdk_HttpClient* zetaHttpClient = (ZetaSdk_HttpClient*)ZetaSdk_buildHttpClient(zetaSdkClient);
 
     runSample(zetaHttpClient, poppToken);

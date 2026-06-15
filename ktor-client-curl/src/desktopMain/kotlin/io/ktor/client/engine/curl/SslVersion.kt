@@ -29,7 +29,7 @@ import kotlinx.cinterop.UnsafeNumber
 import libcurl.*
 
 @OptIn(ExperimentalForeignApi::class, UnsafeNumber::class)
-public enum class SslVersion(internal val curlValue: Long) {
+enum class SslVersion(internal val curlValue: Long) {
     DEFAULT(CURL_SSLVERSION_DEFAULT.toLong()),
     TLS_1_2(CURL_SSLVERSION_TLSv1_2.toLong()),
     TLS_1_3(CURL_SSLVERSION_TLSv1_3.toLong()),

@@ -73,6 +73,7 @@ import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.CPointerVar
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.IntVar
+import kotlinx.cinterop.MemScope
 import kotlinx.cinterop.UByteVar
 import kotlinx.cinterop.UnsafeNumber
 import kotlinx.cinterop.alloc
@@ -93,8 +94,10 @@ import platform.posix.mktime
 import platform.posix.tm
 
 @OptIn(ExperimentalForeignApi::class, UnsafeNumber::class)
-actual class OcspHandler {
-    actual fun getProducedAtEpochSeconds(ocspResponseDer: ByteArray): Long = memScoped {
+actual class OcspHandlerImpl : OcspHandler {
+    val failedToParseIssuerErrorMessage = "Failed to parse issuer"
+    val failedToParseCertificateErrorMessage = "Failed to parse certificate"
+    actual override fun getProducedAtEpochSeconds(ocspResponseDer: ByteArray): Long = memScoped {
         val pData = alloc<CPointerVar<UByteVar>>()
         pData.value = ocspResponseDer.refTo(0).getPointer(this).reinterpret()
 
@@ -121,7 +124,7 @@ actual class OcspHandler {
         }
     }
 
-    actual fun validate(
+    actual override fun validate(
         ocspResponseDer: ByteArray,
         certDer: ByteArray,
         issuerDer: ByteArray,
@@ -145,12 +148,12 @@ actual class OcspHandler {
                 val pCert = alloc<CPointerVar<UByteVar>>()
                 pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
                 val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
-                    ?: error("Failed to parse certificate")
+                    ?: error(failedToParseCertificateErrorMessage)
 
                 val pIssuer = alloc<CPointerVar<UByteVar>>()
                 pIssuer.value = issuerDer.refTo(0).getPointer(this).reinterpret()
                 val issuer = d2i_X509(null, pIssuer.ptr, issuerDer.size.convert())
-                    ?: error("Failed to parse issuer")
+                    ?: error(failedToParseIssuerErrorMessage)
 
                 try {
                     val store = X509_STORE_new() ?: error("Failed to create X509 store")
@@ -190,16 +193,16 @@ actual class OcspHandler {
         }
     }
 
-    actual suspend fun prepareOcspRequest(certDer: ByteArray, issuerDer: ByteArray): OcspRequestData = memScoped {
+    actual override suspend fun prepareOcspRequest(certDer: ByteArray, issuerDer: ByteArray): OcspRequestData = memScoped {
         val pCert = alloc<CPointerVar<UByteVar>>()
         pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
         val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
-            ?: error("Failed to parse certificate")
+            ?: error(failedToParseCertificateErrorMessage)
 
         val pIssuer = alloc<CPointerVar<UByteVar>>()
         pIssuer.value = issuerDer.refTo(0).getPointer(this).reinterpret()
         val issuer = d2i_X509(null, pIssuer.ptr, issuerDer.size.convert())
-            ?: error("Failed to parse issuer")
+            ?: error(failedToParseIssuerErrorMessage)
 
         try {
             val ocspUrl = extractOcspUrl(cert) ?: error("No OCSP URL")
@@ -259,45 +262,52 @@ actual class OcspHandler {
         return epoch
     }
 
-    actual fun extractCrlUrl(certDer: ByteArray): String? = memScoped {
-        val pCert = alloc<CPointerVar<UByteVar>>()
-        pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
-        val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
-            ?: return null
-
+    actual override fun extractCrlUrl(certDer: ByteArray): String? = memScoped {
+        val cert = parseCert(certDer) ?: return null
         try {
-            val crlDp = X509_get_ext_d2i(cert, NID_crl_distribution_points, null, null)
-                ?: return null
-
-            val stack = crlDp.reinterpret<OPENSSL_STACK>()
-            val num = OPENSSL_sk_num(stack)
-
-            for (i in 0 until num) {
-                val dp = OPENSSL_sk_value(stack, i)?.reinterpret<DIST_POINT>() ?: continue
-                val dpName = dp.pointed.distpoint ?: continue
-
-                if (dpName.pointed.type == 0) {
-                    val genNames = dpName.pointed.name.fullname?.reinterpret<OPENSSL_STACK>()
-                    if (genNames != null) {
-                        val gnNum = OPENSSL_sk_num(genNames)
-
-                        for (j in 0 until gnNum) {
-                            val genName = OPENSSL_sk_value(genNames, j)?.reinterpret<GENERAL_NAME>() ?: continue
-                            if (genName.pointed.type == GEN_URI) {
-                                val uri = ASN1_STRING_get0_data(genName.pointed.d.ia5?.reinterpret())?.reinterpret<ByteVar>()?.toKString()
-                                if (uri != null) return uri
-                            }
-                        }
-                    }
-                }
-            }
-            null
+            val stack = X509_get_ext_d2i(cert, NID_crl_distribution_points, null, null)
+                ?.reinterpret<OPENSSL_STACK>() ?: return null
+            extractUriFromStack(stack)
         } finally {
             X509_free(cert)
         }
     }
 
-    actual fun validateCrl(crlDer: ByteArray, certDer: ByteArray, issuerDer: ByteArray) = memScoped {
+    private fun MemScope.parseCert(certDer: ByteArray): CPointer<X509>? {
+        val pCert = alloc<CPointerVar<UByteVar>>()
+        pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
+        return d2i_X509(null, pCert.ptr, certDer.size.convert())
+    }
+
+    private fun extractUriFromStack(stack: CPointer<OPENSSL_STACK>): String? {
+        for (i in 0 until OPENSSL_sk_num(stack)) {
+            val dp = OPENSSL_sk_value(stack, i)?.reinterpret<DIST_POINT>() ?: continue
+            val url = extractUriFromDistPoint(dp) ?: continue
+            return url
+        }
+        return null
+    }
+
+    private fun extractUriFromDistPoint(dp: CPointer<DIST_POINT>): String? {
+        val dpName = dp.pointed.distpoint ?: return null
+        if (dpName.pointed.type != 0) return null
+        val genNames = dpName.pointed.name.fullname?.reinterpret<OPENSSL_STACK>() ?: return null
+        return extractUriFromGenNames(genNames)
+    }
+
+    private fun extractUriFromGenNames(genNames: CPointer<OPENSSL_STACK>): String? {
+        for (j in 0 until OPENSSL_sk_num(genNames)) {
+            val genName = OPENSSL_sk_value(genNames, j)?.reinterpret<GENERAL_NAME>() ?: continue
+            if (genName.pointed.type == GEN_URI) {
+                return ASN1_STRING_get0_data(genName.pointed.d.ia5?.reinterpret())
+                    ?.reinterpret<ByteVar>()
+                    ?.toKString()
+            }
+        }
+        return null
+    }
+
+    actual override fun validateCrl(crlDer: ByteArray, certDer: ByteArray, issuerDer: ByteArray) = memScoped {
         val pCrl = alloc<CPointerVar<UByteVar>>()
         pCrl.value = crlDer.refTo(0).getPointer(this).reinterpret()
         val crl = d2i_X509_CRL(null, pCrl.ptr, crlDer.size.convert())
@@ -307,12 +317,12 @@ actual class OcspHandler {
             val pCert = alloc<CPointerVar<UByteVar>>()
             pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
             val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
-                ?: error("Failed to parse certificate")
+                ?: error(failedToParseCertificateErrorMessage)
 
             val pIssuer = alloc<CPointerVar<UByteVar>>()
             pIssuer.value = issuerDer.refTo(0).getPointer(this).reinterpret()
             val issuer = d2i_X509(null, pIssuer.ptr, issuerDer.size.convert())
-                ?: error("Failed to parse issuer")
+                ?: error(failedToParseIssuerErrorMessage)
 
             try {
                 val issuerPubKey = X509_get_pubkey(issuer)

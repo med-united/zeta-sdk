@@ -27,27 +27,24 @@ package de.gematik.zeta.sdk.attestation.interfaces
 import io.ktor.http.RequestConnectionPoint
 
 actual class ProcessMonitor actual constructor(private val allowedExecutables: List<String>) {
+    val notImplementedYet = "Not yet implemented"
     actual fun isRunning(processName: String): Boolean {
         return false
     }
 
     actual fun findSocketAndPid(origin: RequestConnectionPoint): Int? {
-        TODO("Not yet implemented")
+        TODO(notImplementedYet)
     }
 
     actual fun getProcessName(pid: Int?): String? {
-        TODO("Not yet implemented")
+        TODO(notImplementedYet)
     }
 
     actual fun getProcessExecutablePath(pid: Int?): String? {
-        TODO("Not yet implemented")
+        TODO(notImplementedYet)
     }
 
     actual fun isProcessAllowed(origin: RequestConnectionPoint): Boolean {
         return allowedExecutables.isEmpty()
     }
-}
-
-actual fun getEnv(variable: String): String? {
-    TODO("Not yet implemented")
 }
