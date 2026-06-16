@@ -27,6 +27,7 @@ package de.gematik.zeta.driver
 import de.gematik.zeta.driver.model.SdkInstanceConfig
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.storage.InMemoryStorage
+import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -34,6 +35,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -223,42 +225,112 @@ class DriverUtilsTest {
     }
 
     @Test
-    fun shouldForwardHeader_returnsTrue_whenHeaderIsAllowed() {
+    fun shouldAutoForwardHeader_returnsTrue_whenHeaderIsAllowed() {
         // Assert
-        assertTrue(shouldForwardHeader("Authorization"))
-        assertTrue(shouldForwardHeader("X-Custom-Header"))
-        assertTrue(shouldForwardHeader("Accept"))
+        assertTrue(shouldForwardHeader("Authorization", true))
+        assertTrue(shouldForwardHeader("X-Custom-Header", true))
+        assertTrue(shouldForwardHeader("Accept", true))
+        assertTrue(shouldForwardHeader("Authorization", false))
+        assertTrue(shouldForwardHeader("X-Custom-Header", false))
+        assertTrue(shouldForwardHeader("Accept", false))
     }
 
     @Test
-    fun shouldForwardHeader_returnsFalse_whenHeaderIsContentType() {
+    fun shouldAutoForwardHeader_forwardHostHeaders() {
         // Assert
-        assertFalse(shouldForwardHeader(HttpHeaders.ContentType))
+        assertTrue(shouldForwardHeader("Host", false))
+        assertTrue(shouldForwardHeader("Forwarded", false))
+        assertTrue(shouldForwardHeader("X-Forwarded-Host", false))
+        assertTrue(shouldForwardHeader("X-Forwarded-Port", false))
     }
 
     @Test
-    fun shouldForwardHeader_returnsFalse_whenHeaderIsContentLength() {
+    fun shouldAutoForwardHeader_blockHostHeaders() {
         // Assert
-        assertFalse(shouldForwardHeader(HttpHeaders.ContentLength))
+        assertFalse(shouldForwardHeader("Host", true))
+        assertFalse(shouldForwardHeader("Forwarded", true))
+        assertFalse(shouldForwardHeader("X-Forwarded-Host", true))
+        assertFalse(shouldForwardHeader("X-Forwarded-Port", true))
     }
 
     @Test
-    fun shouldForwardHeader_returnsFalse_whenHeaderIsTransferEncoding() {
+    fun shouldAutoForwardHeader_hostHeadersIsCaseInsensitive() {
         // Assert
-        assertFalse(shouldForwardHeader(HttpHeaders.TransferEncoding))
+        assertFalse(shouldForwardHeader("x-forwarded-host", true))
+        assertFalse(shouldForwardHeader("X-Forwarded-Host", true))
+        assertFalse(shouldForwardHeader("X-FORWARDED-HOST", true))
     }
 
     @Test
-    fun shouldForwardHeader_returnsFalse_whenHeaderIsConnection() {
+    fun shouldAutoForwardHeader_returnsFalse_whenHeaderIsContentType() {
         // Assert
-        assertFalse(shouldForwardHeader(HttpHeaders.Connection))
+        assertFalse(shouldForwardHeader(HttpHeaders.ContentType, true))
+        assertFalse(shouldForwardHeader(HttpHeaders.ContentType, false))
     }
 
     @Test
-    fun shouldForwardHeader_isCaseInsensitive() {
+    fun shouldAutoForwardHeader_returnsFalse_whenHeaderIsContentLength() {
         // Assert
-        assertFalse(shouldForwardHeader("content-type"))
-        assertFalse(shouldForwardHeader("CONTENT-TYPE"))
-        assertFalse(shouldForwardHeader("Content-Type"))
+        assertFalse(shouldForwardHeader(HttpHeaders.ContentLength, true))
+        assertFalse(shouldForwardHeader(HttpHeaders.ContentLength, false))
+    }
+
+    @Test
+    fun shouldAutoForwardHeader_returnsFalse_whenHeaderIsTransferEncoding() {
+        // Assert
+        assertFalse(shouldForwardHeader(HttpHeaders.TransferEncoding, true))
+        assertFalse(shouldForwardHeader(HttpHeaders.TransferEncoding, false))
+    }
+
+    @Test
+    fun shouldAutoForwardHeader_returnsFalse_whenHeaderIsConnection() {
+        // Assert
+        assertFalse(shouldForwardHeader(HttpHeaders.Connection, true))
+        assertFalse(shouldForwardHeader(HttpHeaders.Connection, false))
+    }
+
+    @Test
+    fun shouldAutoForwardHeader_isCaseInsensitive() {
+        // Assert
+        assertFalse(shouldForwardHeader("content-type", false))
+        assertFalse(shouldForwardHeader("CONTENT-TYPE", false))
+        assertFalse(shouldForwardHeader("Content-Type", false))
+    }
+
+    @Test
+    fun buildForwardHeaders_doesNotDuplicatePoPP_whenAlreadyPresentInIncomingRequest() {
+        // Arrange
+        val incoming = Headers.build { append(POPP_TOKEN_HEADER_NAME, "incoming-token") }
+
+        // Act
+        val result = buildForwardHeaders(incoming, poppToken = "config-token", false)
+
+        // Assert
+        assertEquals(1, result.getAll(POPP_TOKEN_HEADER_NAME)?.size)
+        assertEquals("incoming-token", result[POPP_TOKEN_HEADER_NAME])
+    }
+
+    @Test
+    fun buildForwardHeaders_usesFallbackPoppToken_whenNotPresentInIncomingRequest() {
+        // Arrange
+        val incoming = Headers.build { append("Accept", "*/*") }
+
+        // Act
+        val result = buildForwardHeaders(incoming, poppToken = "config-token", false)
+
+        // Assert
+        assertEquals("config-token", result[POPP_TOKEN_HEADER_NAME])
+    }
+
+    @Test
+    fun buildForwardHeaders_doesNotSetPoPP_whenNotInIncomingAndPoppTokenIsNull() {
+        // Arrange
+        val incoming = Headers.build { append("Accept", "*/*") }
+
+        // Act
+        val result = buildForwardHeaders(incoming, poppToken = null, false)
+
+        // Assert
+        assertNull(result[POPP_TOKEN_HEADER_NAME])
     }
 }

@@ -49,6 +49,11 @@ val AUTHORIZATION_SERVER_SCHEMA_JSON = """
       "format" : "uri",
       "description" : "The URL of the nonce endpoint."
     },
+    "registration_endpoint" : {
+      "type" : "string",
+      "format" : "uri",
+      "description" : "The URL of the client registration endpoint."
+    },
     "openid_providers_endpoint" : {
       "type" : "string",
       "format" : "uri",
@@ -71,7 +76,7 @@ val AUTHORIZATION_SERVER_SCHEMA_JSON = """
       "description" : "The response types supported by the authorization server.",
       "items" : {
         "type" : "string",
-        "enum" : [ "code", "token" ]
+        "enum" : [ "code", "token", "id_token", "token id_token", "code id_token", "code token id_token", "code token" ]
       }
     },
     "response_modes_supported" : {
@@ -150,7 +155,11 @@ val AUTHORIZATION_SERVER_SCHEMA_JSON = """
       }
     }
   },
-  "required" : [ "issuer", "authorization_endpoint", "nonce_endpoint", "openid_providers_endpoint", "token_endpoint", "jwks_uri", "scopes_supported", "response_types_supported", "grant_types_supported", "token_endpoint_auth_methods_supported", "token_endpoint_auth_signing_alg_values_supported", "ui_locales_supported", "code_challenge_methods_supported" ]
+  "required" : [ "issuer", "authorization_endpoint", "nonce_endpoint", "token_endpoint", "jwks_uri", "scopes_supported", "response_types_supported", "grant_types_supported", "token_endpoint_auth_methods_supported", "token_endpoint_auth_signing_alg_values_supported", "code_challenge_methods_supported" ],
+  "anyOf" : [
+    { "required" : [ "registration_endpoint" ] },
+    { "required" : [ "openid_providers_endpoint" ] }
+  ]
 }
 """.trimIndent()
 

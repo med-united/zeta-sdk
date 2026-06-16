@@ -36,6 +36,7 @@ public interface PrescriptionRepository {
     public suspend fun updatePrescription(id: Long, model: PrescriptionModel)
     public suspend fun deletePrescription(id: Long)
     public suspend fun forgetAuthorization()
+    public suspend fun forgetRegistration()
     public suspend fun logoutAuthorization()
     public suspend fun status(): SdkStatus
 }
@@ -66,6 +67,10 @@ public class PrescriptionRepositoryImpl(
 
     override suspend fun forgetAuthorization() {
         DIContainer.httpClientProvider.forget()
+    }
+
+    override suspend fun forgetRegistration() {
+        DIContainer.httpClientProvider.clearRegistration()
     }
 
     override suspend fun logoutAuthorization() {

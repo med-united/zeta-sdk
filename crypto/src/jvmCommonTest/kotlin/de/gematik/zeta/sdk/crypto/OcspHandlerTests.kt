@@ -59,6 +59,7 @@ import java.util.Date
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -164,6 +165,25 @@ class OcspHandlerTest {
             }
         val signer = JcaContentSignerBuilder("SHA256WithECDSA").setProvider("BC").build(caKeyPair.private)
         return JcaX509CRLConverter().setProvider("BC").getCRL(crlBuilder.build(signer)).encoded
+    }
+
+    private fun buildOcspResponse(
+        cert: X509Certificate = leafCert,
+        nextUpdate: Date?,
+        thisUpdate: Date = now,
+        status: CertificateStatus? = null, // null = GOOD in Bouncy Castle
+    ): ByteArray {
+        val digestCalc = JcaDigestCalculatorProviderBuilder().setProvider("BC").build()
+        val caHolder = JcaX509CertificateHolder(caCert)
+        val certId = CertificateID(
+            digestCalc[CertificateID.HASH_SHA1],
+            caHolder,
+            cert.serialNumber,
+        )
+        val basicGen = BasicOCSPRespBuilder(RespID(caHolder.subject))
+        basicGen.addResponse(certId, status, thisUpdate, nextUpdate)
+        val basicResp = basicGen.build(caSigner, null, thisUpdate)
+        return OCSPRespBuilder().build(OCSPRespBuilder.SUCCESSFUL, basicResp).encoded
     }
 
     @Test
@@ -283,6 +303,57 @@ class OcspHandlerTest {
         assertFailsWith<IllegalArgumentException> {
             handler.validateCrl(crlDer, leafCert.encoded, caCert.encoded)
         }
+    }
+
+    @Test
+    fun getNextUpdateEpochSeconds_returnsNull_whenCertSerialNotInResponse() {
+        val ocspDer = buildOcspResponse(
+            cert = leafCert,
+            nextUpdate = Date(now.time + 3600_000L),
+        )
+
+        val result = handler.getNextUpdateEpochSeconds(
+            ocspResponseDer = ocspDer,
+            certDer = revokedCert.encoded,
+            issuerDer = caCert.encoded,
+        )
+
+        assertNull(result)
+    }
+
+    @Test
+    fun getNextUpdateEpochSeconds_returnsExpiredValue_whenNextUpdateInPast() {
+        val yesterday = Date(now.time - 24 * 3600 * 1000L)
+        val ocspDer = buildOcspResponse(nextUpdate = yesterday)
+
+        val result = handler.getNextUpdateEpochSeconds(
+            ocspResponseDer = ocspDer,
+            certDer = leafCert.encoded,
+            issuerDer = caCert.encoded,
+        )
+
+        assertNotNull(result)
+        assert(result < now.time / 1000) { "nextUpdate should be in the past" }
+    }
+
+    @Test
+    fun getNextUpdateEpochSeconds_returnsOneWeek_forPoPPScenario() {
+        val producedAt = Date(now.time - 3 * 24 * 3600 * 1000L)
+        val nextUpdate = Date(now.time + 4 * 24 * 3600 * 1000L)
+        val ocspDer = buildOcspResponse(
+            nextUpdate = nextUpdate,
+            thisUpdate = producedAt,
+        )
+
+        val result = handler.getNextUpdateEpochSeconds(
+            ocspResponseDer = ocspDer,
+            certDer = leafCert.encoded,
+            issuerDer = caCert.encoded,
+        )
+
+        assertNotNull(result)
+        assert(result > now.time / 1000) { "nextUpdate should be in the future" }
+        assert(result < now.time / 1000 + 5 * 24 * 3600) { "nextUpdate should be 4 days from now" }
     }
 
     private companion object {

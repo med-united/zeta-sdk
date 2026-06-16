@@ -98,13 +98,5 @@ fun getDummyAuthServerObject(
         serviceDocumentation = "",
         uiLocalesSupported = listOf(""),
         codeChallengeMethodsSupported = listOf(""),
-        apiVersionsSupported =
-        listOf(
-            ApiVersion(
-                majorVersion = 1,
-                version = "",
-                status = ApiVersionStatus.STABLE,
-                documentationUri = "",
-            ),
-        ),
+        registrationEndpoint = "",
     )

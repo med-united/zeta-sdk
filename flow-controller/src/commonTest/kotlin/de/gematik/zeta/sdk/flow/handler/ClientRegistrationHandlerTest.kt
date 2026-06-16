@@ -31,8 +31,6 @@ import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
 import de.gematik.zeta.sdk.clientregistration.ClientRegistrationApiImpl
 import de.gematik.zeta.sdk.clientregistration.model.ClientRegistrationResponse
 import de.gematik.zeta.sdk.configuration.ConfigurationStorage
-import de.gematik.zeta.sdk.configuration.models.ApiVersion
-import de.gematik.zeta.sdk.configuration.models.ApiVersionStatus
 import de.gematik.zeta.sdk.configuration.models.AuthorizationServerMetadata
 import de.gematik.zeta.sdk.configuration.models.ProtectedResourceMetadata
 import de.gematik.zeta.sdk.configuration.models.ZetaAslUse
@@ -258,6 +256,7 @@ class ClientRegistrationHandlerTest {
 
     private fun createClient(mockEngine: MockEngine): ZetaHttpClient =
         ZetaHttpClientBuilder()
+            .contentNegotiation(true)
             .build(mockEngine)
 
     private fun createHandler(mock: MockEngine, maxRetries: Int = MAX_RETRIES): ClientRegistrationHandler {
@@ -346,15 +345,7 @@ class ClientRegistrationHandlerTest {
                 serviceDocumentation = "",
                 uiLocalesSupported = listOf(""),
                 codeChallengeMethodsSupported = listOf(""),
-                apiVersionsSupported =
-                listOf(
-                    ApiVersion(
-                        majorVersion = 1,
-                        version = "",
-                        status = ApiVersionStatus.STABLE,
-                        documentationUri = "",
-                    ),
-                ),
+                registrationEndpoint = "",
             )
         }
 
@@ -499,7 +490,6 @@ class ConfigurationHandlerTest {
     }
 
     @Test
-    @Ignore
     fun handle_throwsValidationException_whenSchemaValidationFails() = runTest {
         // Arrange
         val resource = "https://api.example.com"
@@ -523,7 +513,6 @@ class ConfigurationHandlerTest {
     }
 
     @Test
-    @Ignore
     fun handle_throwsException_whenValidationThrowsAnException() = runTest {
         // Arrange
         val resource = "https://api.example.com"

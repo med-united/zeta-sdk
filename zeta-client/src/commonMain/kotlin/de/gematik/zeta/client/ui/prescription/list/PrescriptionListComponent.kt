@@ -107,6 +107,10 @@ public fun PrescriptionListComponent() {
                 Text("Logout")
             }
             Spacer(modifier = Modifier.width(8.dp))
+            Button(onClick = viewModel::forgetRegistration) {
+                Text("Clear Registration")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
             Button(onClick = viewModel::forgetAuthorization) {
                 Text("Forget")
             }

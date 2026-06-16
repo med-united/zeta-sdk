@@ -141,7 +141,9 @@ class ConfigurationHandler(
         val asJson = configurationApi.fetchAuthorizationMetadata(authServers.first())
         validateOrThrow(WellKnownTypes.AUTHORIZATION_METADATA, asJson, configurationApi.getAuthorizationSchema())
 
-        return Json.decodeFromString(asJson)
+        return Json {
+            ignoreUnknownKeys = true
+        }.decodeFromString(asJson)
     }
 
     /**

@@ -31,8 +31,6 @@ import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
 import de.gematik.zeta.sdk.clientregistration.ClientRegistrationStorageImpl
 import de.gematik.zeta.sdk.clientregistration.model.ClientRegistrationResponse
 import de.gematik.zeta.sdk.configuration.ConfigurationStorageImpl
-import de.gematik.zeta.sdk.configuration.models.ApiVersion
-import de.gematik.zeta.sdk.configuration.models.ApiVersionStatus
 import de.gematik.zeta.sdk.configuration.models.AuthorizationServerMetadata
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
@@ -1307,14 +1305,6 @@ private fun getAuthServer(resource: String): AuthorizationServerMetadata {
         serviceDocumentation = "",
         uiLocalesSupported = listOf(""),
         codeChallengeMethodsSupported = listOf(""),
-        apiVersionsSupported =
-        listOf(
-            ApiVersion(
-                majorVersion = 1,
-                version = "",
-                status = ApiVersionStatus.STABLE,
-                documentationUri = "",
-            ),
-        ),
+        registrationEndpoint = "",
     )
 }

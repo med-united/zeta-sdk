@@ -42,7 +42,7 @@ actual suspend fun getPlatform(): Platform {
 
 actual fun getPostureType(): PostureType {
     when (platform()) {
-        is de.gematik.zeta.platform.Platform.Native.Macos -> return PostureType.APPLE
+        is de.gematik.zeta.platform.Platform.Native.Macos -> return PostureType.SOFTWARE
         is de.gematik.zeta.platform.Platform.Native.Linux -> return PostureType.SOFTWARE
         is de.gematik.zeta.platform.Platform.Native.Windows -> return PostureType.SOFTWARE
         else -> error("unknown platform")
@@ -50,7 +50,7 @@ actual fun getPostureType(): PostureType {
 }
 
 actual suspend fun buildPosture(
-    platformProductId: PlatformProductId,
+    platformProductId: PlatformProductId?,
     productId: String,
     productVersion: String,
     attChallenge: String,
@@ -60,28 +60,7 @@ actual suspend fun buildPosture(
     val platformInfo = getPlatformInfo()
     val json = Json {
         encodeDefaults = true
-    }
-
-    val platform = getPlatform()
-    if (platform == Platform.APPLE) {
-        return json.encodeToJsonElement(
-            ApplePosture.serializer(),
-            ApplePosture(
-                productId = productId,
-                productVersion = productVersion,
-                platformProductId = platformProductId,
-                systemVersion = platformInfo.osVersion,
-                systemName = platformInfo.os,
-                deviceModel = "deviceModel",
-                keyId = "keyId",
-                fmt = "apple-appattest",
-                attStmt = AttStmt(emptyList(), ""),
-                authData = AuthData("", "", 1, "", ""),
-                signature = "signature",
-                assertionAuthenticatorData = AssertionAuthenticatorData("", 1),
-                clientDataJson = "clientDataJson",
-            ),
-        )
+        explicitNulls = false
     }
 
     return json.encodeToJsonElement(
@@ -97,6 +76,3 @@ actual suspend fun buildPosture(
         ),
     )
 }
-
-// TODO
-fun platformProductId(): JsonElement = Json.encodeToJsonElement("")

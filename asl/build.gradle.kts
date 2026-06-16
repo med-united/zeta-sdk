@@ -1,3 +1,4 @@
+import de.gematik.zeta.sdk.buildlogic.isJvmEnabled
 import de.gematik.zeta.sdk.buildlogic.setupBuildLogic
 import org.gradle.kotlin.dsl.sourceSets
 
@@ -27,6 +28,15 @@ setupBuildLogic {
                     implementation(kotlin("test"))
                     implementation(libs.coroutines.test)
                     implementation(libs.ktor.client.mock)
+                }
+            }
+
+            if (project.isJvmEnabled) {
+                sourceSets.jvmTest.dependencies {
+                    implementation(kotlin("test"))
+                    implementation(libs.okhttp.mockwebserver)
+                    implementation(libs.okhttp.tls)
+                    implementation(libs.mockk)
                 }
             }
         }

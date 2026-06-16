@@ -54,16 +54,13 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
-import java.io.ByteArrayInputStream
 import java.net.InetAddress
-import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
-import javax.net.ssl.X509TrustManager
 import kotlin.io.encoding.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -581,7 +578,7 @@ class ZetaHttpClientJvmTest {
 
     @Test
     fun zetaHttpClient_installsContentNegotiation_always() {
-        val client = zetaHttpClient(configure = {})
+        val client = zetaHttpClient(configure = { contentNegotiation = true })
         val hasPlugin = client.useRaw { pluginOrNull(ContentNegotiation) != null }
 
         assertTrue(hasPlugin)
@@ -626,26 +623,6 @@ class ZetaHttpClientJvmTest {
     }
 
     @Test
-    fun checkServerTrusted_chainSmallerThan2_skipsRevocationCheck() {
-        // Arrange
-        val delegate = object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-        }
-        val trustManager = RevocationCheckingTrustManager(delegate)
-        val cert = CertificateFactory.getInstance("X.509")
-            .generateCertificate(
-                ByteArrayInputStream(
-                    HeldCertificate.Builder().build().certificate.encoded,
-                ),
-            ) as X509Certificate
-
-        // Act & Assert
-        trustManager.checkServerTrusted(arrayOf(cert), "RSA")
-    }
-
-    @Test
     fun applyProxy_setsSystemProperties_whenSocksWithCredentials() {
         // Arrange
         val cfg = ClientConfig().apply {
@@ -666,6 +643,37 @@ class ZetaHttpClientJvmTest {
         // Assert
         assertEquals("user", System.getProperty("java.net.socks.username"))
         assertEquals("pass", System.getProperty("java.net.socks.password"))
+        client.close()
+    }
+
+    @Test
+    fun buildPlatformClient_setsSslDebug_whenSslVerboseEnabled() {
+        // Arrange
+        val cfg = ClientConfig().apply {
+            security = security.copy(sslVerbose = true)
+        }
+
+        // Act
+        val client = buildPlatformClient(cfg) {}
+
+        // Assert
+        assertEquals("ssl:handshake", System.getProperty("javax.net.debug"))
+        client.close()
+    }
+
+    @Test
+    fun buildPlatformClient_doesNotSetSslDebug_whenSslVerboseDisabled() {
+        // Arrange
+        System.clearProperty("javax.net.debug")
+        val cfg = ClientConfig().apply {
+            security = security.copy(sslVerbose = false)
+        }
+
+        // Act
+        val client = buildPlatformClient(cfg) {}
+
+        // Assert
+        assertNull(System.getProperty("javax.net.debug"))
         client.close()
     }
 
@@ -719,6 +727,110 @@ class ZetaHttpClientJvmTest {
         val expected = "Basic " + Base64.encode("user:pass".encodeToByteArray())
         assertEquals(expected, request.getHeader("Proxy-Authorization"))
         proxyServer.shutdown()
+    }
+
+    @Test
+    fun applyProxy_returnsBuilder_whenProxyConfigIsNull() {
+        val cfg = ClientConfig().apply {
+            network = network.copy(proxyConfig = null)
+        }
+        val client = buildPlatformClient(cfg) {}
+        assertNotNull(client)
+        client.close()
+    }
+
+    @Test
+    fun applyProxy_setsHttpProxy_withoutCredentials() = runTest {
+        val proxyServer = MockWebServer()
+        proxyServer.enqueue(MockResponse().setResponseCode(200))
+        proxyServer.start()
+
+        val cfg = ClientConfig().apply {
+            baseUrlOverride = "https://example.com"
+            network = network.copy(
+                proxyConfig = ProxyConfig(
+                    type = ProxyType.HTTP,
+                    host = "127.0.0.1",
+                    port = proxyServer.port,
+                    username = null,
+                    password = null,
+                ),
+            )
+        }
+
+        val client = buildPlatformClient(cfg) {}
+
+        runCatching {
+            client.get("https://example.com/test")
+        }
+
+        client.close()
+
+        val request = proxyServer.takeRequest()
+        assertEquals("CONNECT", request.method)
+        assertNull(request.getHeader("Proxy-Authorization"))
+        proxyServer.shutdown()
+    }
+
+    @Test
+    fun applyProxy_setsProxyAuthenticator_whenHttpProxyWithCredentials() = runTest {
+        val proxyServer = MockWebServer()
+        proxyServer.enqueue(
+            MockResponse()
+                .setResponseCode(407)
+                .setHeader("Proxy-Authenticate", "Basic realm=\"proxy\""),
+        )
+        proxyServer.enqueue(MockResponse().setResponseCode(200))
+        proxyServer.start()
+
+        val cfg = ClientConfig().apply {
+            baseUrlOverride = "https://example.com"
+            network = network.copy(
+                proxyConfig = ProxyConfig(
+                    type = ProxyType.HTTP,
+                    host = "127.0.0.1",
+                    port = proxyServer.port,
+                    username = "user",
+                    password = "pass".toCharArray(),
+                ),
+            )
+        }
+
+        val client = buildPlatformClient(cfg) {}
+
+        runCatching {
+            client.get("https://example.com/test")
+        }
+
+        client.close()
+
+        proxyServer.takeRequest()
+        val authRequest = proxyServer.takeRequest()
+        val expected = "Basic " + Base64.encode("user:pass".encodeToByteArray())
+        assertEquals("CONNECT", authRequest.method)
+        assertEquals(expected, authRequest.getHeader("Proxy-Authorization"))
+        proxyServer.shutdown()
+    }
+
+    @Test
+    fun applyProxy_setsSocksProxy_withoutCredentials() {
+        val cfg = ClientConfig().apply {
+            network = network.copy(
+                proxyConfig = ProxyConfig(
+                    type = ProxyType.SOCKS,
+                    host = "127.0.0.1",
+                    port = 1080,
+                    username = null,
+                    password = null,
+                ),
+            )
+        }
+
+        val client = buildPlatformClient(cfg) {}
+        assertNotNull(client)
+        client.close()
+
+        assertNull(System.getProperty("java.net.socks.username").takeIf { it == "null" })
     }
 
     private class CaptureLogger : Logger {

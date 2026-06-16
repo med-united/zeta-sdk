@@ -26,6 +26,7 @@ package de.gematik.zeta.sdk.crypto
 
 interface OcspHandler {
     fun getProducedAtEpochSeconds(ocspResponseDer: ByteArray): Long
+    fun getNextUpdateEpochSeconds(ocspResponseDer: ByteArray, certDer: ByteArray, issuerDer: ByteArray): Long?
     fun validate(ocspResponseDer: ByteArray, certDer: ByteArray, issuerDer: ByteArray)
     suspend fun prepareOcspRequest(certDer: ByteArray, issuerDer: ByteArray): OcspRequestData
     fun extractCrlUrl(certDer: ByteArray): String?
@@ -34,6 +35,7 @@ interface OcspHandler {
 
 expect class OcspHandlerImpl() : OcspHandler {
     override fun getProducedAtEpochSeconds(ocspResponseDer: ByteArray): Long
+    override fun getNextUpdateEpochSeconds(ocspResponseDer: ByteArray, certDer: ByteArray, issuerDer: ByteArray): Long?
     override fun validate(ocspResponseDer: ByteArray, certDer: ByteArray, issuerDer: ByteArray)
     override suspend fun prepareOcspRequest(certDer: ByteArray, issuerDer: ByteArray): OcspRequestData
     override fun extractCrlUrl(certDer: ByteArray): String?

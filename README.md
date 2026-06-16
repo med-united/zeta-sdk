@@ -348,8 +348,6 @@ Here is an overview on how the proxy client sits between a test driver and the z
 The purpose of the proxy client is to encapsulate the ZETA protocol and make testing of the
 zeta guard setup easier.
 
-TODO: diagram how the proxy client sits between a test driver and the zeta guard
-
 Requests to the Fachdienst enter the proxy client as normal HTTP requests, get forwarded to the
 ZETA guard using the ZETA and optionally ASL protocol, the ZETA guard validates them and forwards
 them to the Fachdienst backend. This facilitates end-to-end testing and testing whether the ZETA guard
@@ -424,6 +422,12 @@ In the example below these configuration items are set via helm variables, so th
 depending on the environment.
 
 The SMB keystore file is being mounted as kubernetes secret.
+
+An additional configuration can be set as described here
+
+| Value               | Description                                                                                                                                                                                               | Example     |
+|---------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------|
+| FILTER_HOST_HEADERS | Boolean if the Host, XFowarded, and ForwardedHost/ForwardedPort headers should be filtered from the request. The testsuite requires false, but some setups seem to require that these headers be filtered | true, false |
 
 Other values are also set by helm variables, like the used image repository, version, etc.
 
@@ -841,17 +845,18 @@ depending on the state of the implementation according to the project milestones
 
 The ZETA API offers the following public API:
 
-| Operation                    | Description                                                                                                                                               | Return value   | Errors      |
-|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|-------------|
-| build(resource, BuildConfig) | static method to create a new SDK client instance                                                                                                         |                |             |
-| forget()                     | static method to clear all cached information for the FQDN, like instance key, well-known files, or access tokens. This method is mostly used for testing |                |             |
-| discover()                   | Perform discovery and configuration, i.e. mainly reading the well-known files                                                                             |                |             |
-| register()                   | Perform client registration; includes discovery and configuration if not already done                                                                     |                |             |
-| authenticate()               | perform the authentication; includes client registration and discovery and configuration if not alreaady done                                             |                |             |
-| httpClient()                 | Returns an HttpClient with overloaded method that implement the ZETA specific protocol; this includes authentication etc if not already done              |                |             |
-| status()                     | Returns the current state of the client instance                                                                                                          | SdkStatus enum |             |
-| logout()                     | Clears the stored authentication tokens                                                                                                                   |                |             |
-| close()                      | Closing the ZETA SDK client without forgetting the cached information                                                                                     | -              | error codes |
+| Operation                    | Description                                                                                                                                                                            | Return value   | Errors      |
+|------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|-------------|
+| build(resource, BuildConfig) | static method to create a new SDK client instance                                                                                                                                      |                |             |
+| forget()                     | static method to clear all cached information for the FQDN, like instance key, well-known files, or access tokens. This method is mostly used for testing and unregistration scenarios |                |             |
+| discover()                   | Perform discovery and configuration, i.e. mainly reading the well-known files                                                                                                          |                |             |
+| register()                   | Perform client registration; includes discovery and configuration if not already done                                                                                                  |                |             |
+| authenticate()               | perform the authentication; includes client registration and discovery and configuration if not alreaady done                                                                          |                |             |
+| httpClient()                 | Returns an HttpClient with overloaded method that implement the ZETA specific protocol; this includes authentication etc if not already done                                           |                |             |
+| status()                     | Returns the current state of the client instance                                                                                                                                       | SdkStatus enum |             |
+| logout()                     | Clears the stored authentication tokens and deletes the DPoP keys                                                                                                                      |                |             |
+| clearRegistration()          | Clear the client registration without clearing the client instance key                                                                                                                 |                |             |
+| close()                      | Closing the ZETA SDK client without forgetting the cached information and cookies                                                                                                      | -              | error codes |
 
 Inside the HTTP operations as provided by the HttpClient, the discovery, client registration and authentication are performed automatically.
 The methods discover(), register(), and authenticate() are idempotent.
@@ -950,20 +955,6 @@ This is useful for testing or environments where you manage persistence yourself
 val config = StorageConfig.Custom(provider = MemoryStorage())
 ```
 
-### Custom SMC-B Connector
-
-You can provide your own implementation by injecting a custom connector via the `AuthConfig`.
-This is useful when you already have an existing SMC-B connector implementation, or when you want to control how the certificate and signing operations are performed.
-
-**Interface:**
-
-| Method                                  | Description                                                                  |
-|-----------------------------------------|------------------------------------------------------------------------------|
-| `readCertificate()`                     | Return the SMC-B X.509 certificate in DER format                             |
-| `externalAuthenticate(base64Challenge)` | Sign the base64-encoded challenge and return the DER-encoded ECDSA signature |
-
----
-
 ### Custom Storage
 
 By default, the SDK uses platform-specific encrypted storage. You can replace this with your own storage implementation.
@@ -978,6 +969,25 @@ All pointers must remain valid for the lifetime of the SDK instance.
 | `get(key)`          | Retrieve the value for the given key     |
 | `remove(key)`       | Delete the entry for the given key       |
 | `clear()`           | Delete all stored entries                |
+
+**Thread safety**
+
+Custom SdkStorage implementations must be thread-safe, as the SDK may invoke storage operations concurrently from multiple coroutines.
+See InMemoryStorage.kt for a reference implementation using a coroutine Mutex.
+
+---
+
+### Custom SMC-B Connector
+
+You can provide your own implementation by injecting a custom connector via the `AuthConfig`.
+This is useful when you already have an existing SMC-B connector implementation, or when you want to control how the certificate and signing operations are performed.
+
+**Interface:**
+
+| Method                                  | Description                                                                  |
+|-----------------------------------------|------------------------------------------------------------------------------|
+| `readCertificate()`                     | Return the SMC-B X.509 certificate in DER format                             |
+| `externalAuthenticate(base64Challenge)` | Sign the base64-encoded challenge and return the DER-encoded ECDSA signature |
 
 ---
 
@@ -1012,6 +1022,9 @@ This object configures the HTTP client. It contains three sub-objects:
 #### NetworkConfig
 
 This object contains configuration for e.g. retries and timeouts.
+
+The HTTP client automatically accepts and stores cookies in memory for the duration of the session (AcceptAllCookiesStorage).
+Cookies are cleared when close() is called.
 
 #### SecurityConfig
 

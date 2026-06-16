@@ -45,15 +45,17 @@ import de.gematik.zeta.sdk.flow.handler.ConfigurationHandler
 import de.gematik.zeta.sdk.flow.handler.EnsureAccessTokenHandler
 import de.gematik.zeta.sdk.flow.handler.RetryHandler
 import de.gematik.zeta.sdk.flow.zetaPlugin
+import de.gematik.zeta.sdk.network.http.client.CompositeCookieStorage
+import de.gematik.zeta.sdk.network.http.client.SdkCookieStorage
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
+import de.gematik.zeta.sdk.network.http.client.hostOf
 import de.gematik.zeta.sdk.storage.SdkStorage
 import de.gematik.zeta.sdk.storage.StorageConfig
 import de.gematik.zeta.sdk.storage.provideSdkStorage
 import de.gematik.zeta.sdk.tpm.TpmProvider
 import de.gematik.zeta.sdk.tpm.platformDefaultProvider
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.request.header
 import io.ktor.client.request.url
@@ -95,6 +97,24 @@ object ZetaSdk {
                 flowContext.tpmStorage.clear()
                 tpmProvider.forget()
                 flowContext.aslStorage.clear()
+                sdkCookieStorage.clearCookie()
+            }
+
+            else -> this.logout().getOrThrow()
+        }
+    }
+
+    suspend fun ZetaSdkClient.clearRegistration(): Result<Unit> = runCatching {
+        when (this) {
+            is ZetaSdkClientImpl -> {
+                flowContext.authenticationStorage.clear()
+                flowContext.configurationStorage.clear()
+                flowContext.clientRegistrationStorage.clear()
+                // the default TPM provider uses tpmStorage to store the DpopKeys
+                // Thus no need to clear the TPM (which would clear the instance key as well)
+                flowContext.tpmStorage.deleteAllDpopKeys()
+                flowContext.aslStorage.clear()
+                sdkCookieStorage.clearCookie()
             }
 
             else -> this.logout().getOrThrow()
@@ -107,10 +127,21 @@ private class ZetaSdkClientImpl(
     private val cfg: BuildConfig,
 ) : ZetaSdkClient {
     private lateinit var mainHttpClient: ZetaHttpClient
-    private val httpClientBuilder: ZetaHttpClientBuilder = (
-        cfg.httpClientBuilder
-            ?: ZetaHttpClientBuilder().logging(LogLevel.ALL)
-        )
+
+    private val storage: SdkStorage = when (val storageConfig = cfg.storageConfig) {
+        is StorageConfig.Default -> provideSdkStorage(storageConfig)
+        is StorageConfig.Custom -> storageConfig.provider
+    }
+
+    val sdkCookieStorage = SdkCookieStorage(storage, hostOf(resource))
+    private val compositeCookieStorage = CompositeCookieStorage(sdkCookieStorage)
+
+    private val httpClientBuilder: ZetaHttpClientBuilder =
+        (cfg.httpClientBuilder ?: ZetaHttpClientBuilder())
+            .copy(
+                baseUrl = resource,
+                cookieStorage = compositeCookieStorage,
+            )
 
     init {
         cfg.logger?.let { Log.setLogger(it) }
@@ -124,11 +155,6 @@ private class ZetaSdkClientImpl(
     private var clientRegistrationApiClient: ZetaHttpClient? = null
     private var authApiClient: ZetaHttpClient? = null
     private var aslApiClient: ZetaHttpClient? = null
-
-    private val storage: SdkStorage = when (val storageConfig = cfg.storageConfig) {
-        is StorageConfig.Default -> provideSdkStorage(storageConfig)
-        is StorageConfig.Custom -> storageConfig.provider
-    }
 
     val flowContext = FlowContextImpl(resource, forwardingClient, storage)
     private val configHandler: ConfigurationHandler by lazy {
@@ -221,7 +247,7 @@ private class ZetaSdkClientImpl(
      */
     override fun httpClient(builder: ZetaHttpClientBuilder.() -> Unit): ZetaHttpClient {
         val orchestrator = newOrchestrator()
-        mainHttpClient = ZetaHttpClientBuilder(resource)
+        mainHttpClient = ZetaHttpClientBuilder(resource, cookieStorage = sdkCookieStorage)
             .apply(builder)
             .build(addExtras = {
                 install(aslDecryptionPlugin(aslApi, InnerHttpCodecImpl()))
@@ -246,7 +272,7 @@ private class ZetaSdkClientImpl(
         val hashedToken = accessTokenProvider.hash(token)
         val dpop = accessTokenProvider.createDpopToken(dpopKey.jwk, "GET", targetUrl, null, hashedToken)
 
-        val wsClient = ZetaHttpClientBuilder(resource)
+        val wsClient = ZetaHttpClientBuilder(resource, cookieStorage = sdkCookieStorage)
             .apply(builder)
             .build()
 
@@ -295,6 +321,7 @@ private class ZetaSdkClientImpl(
     override suspend fun logout(): Result<Unit> = runCatching {
         flowContext.authenticationStorage.clear()
         flowContext.tpmStorage.deleteAllDpopKeys()
+        sdkCookieStorage.clearCookie()
     }
 
     override suspend fun close(): Result<Unit> = runCatching {
@@ -302,5 +329,6 @@ private class ZetaSdkClientImpl(
         clientRegistrationApiClient?.close()
         authApiClient?.close()
         aslApiClient?.close()
+        sdkCookieStorage.clearCookie()
     }
 }

@@ -86,7 +86,6 @@ public class Main {
     public static final String POPP_TOKEN = "POPP_TOKEN";
     public static final String POPP_TOKEN_HEADER_NAME = "PoPP";
     public static final String WS_SERVER_CONTEXT_PATH = "WS_SERVER_CONTEXT_PATH";
-    public static final String STORAGE_AES_KEY = "STORAGE_AES_KEY";
     public static final String REQUIRED_ROLE_OID = "REQUIRED_ROLE_OID";
     public static final String WEBSOCKETS_TAG = "Websockets";
     public static final String MAIN_TAG = "Main";
@@ -161,7 +160,9 @@ public class Main {
                     requiredRoleId
                 ),
                 getPlatformProductId(),
-                new ZetaHttpClientBuilder("").disableServerValidation(disableServerValidation).logging(LogLevel.ALL), // NOSONAR client not productive code
+                new ZetaHttpClientBuilder()
+                    .disableServerValidation(disableServerValidation)
+                    .logging(LogLevel.ALL),
                 null,
                 null,
                 null
@@ -179,9 +180,6 @@ public class Main {
                 return Unit.INSTANCE;
             });
 
-            // Forget any previous instance keys etc.
-            ZetaSdkClientExtension.forget(sdkClient);
-
             // Run the parallel WebSocket CRUD example before the plain HTTP example.
             testParallelWebSocketConnections(sdkClient, props, headers);
 
@@ -189,7 +187,7 @@ public class Main {
                 .thenCompose(HttpClientExtension::bodyAsText)
                 .whenComplete((body, ex)  -> {
                     if (ex != null){
-                        Log.INSTANCE.e(ex, "Http", () -> "Http Get failed");
+                        Log.INSTANCE.e(ex, "Http", () -> "Http Get failed: ");
                     }
                     else {
                         Log.INSTANCE.d(null, "Http", () -> "Body:" + body);
@@ -528,6 +526,9 @@ public class Main {
             try {
                 connectAndSubscribe(session, host, contextPath, events, tag).join();
                 sendPrescriptionCommands(session, contextPath, sessionId, events, tag).join();
+            } catch (Exception e) {
+                Log.INSTANCE.e(e, tag, () -> sessionTag(sessionId) + "Session workflow failed");
+                throw e;
             } finally {
                 if (session.isActive()) {
                     session.closeAsync().join();
@@ -600,9 +601,12 @@ public class Main {
     ) {
         long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
         while (System.nanoTime() < deadlineNanos) {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) break;
+
             StompEvent event;
             try {
-                event = events.poll(1, TimeUnit.SECONDS);
+                event = events.poll(Math.min(remainingNanos, TimeUnit.SECONDS.toNanos(1)), TimeUnit.NANOSECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("Interrupted while waiting for " + waitLabel, e);

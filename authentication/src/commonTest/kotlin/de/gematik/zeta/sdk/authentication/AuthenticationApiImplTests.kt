@@ -275,6 +275,7 @@ class AuthenticationApiImplTests {
         clientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
         clientAssertion = "client-assertion-jwt",
         scope = "openid",
+        audience = "audience",
     )
 
     private val validTokenResponseBody = """

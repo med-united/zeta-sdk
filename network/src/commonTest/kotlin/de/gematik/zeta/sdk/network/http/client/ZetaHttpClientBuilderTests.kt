@@ -26,6 +26,7 @@ package de.gematik.zeta.sdk.network.http.client
 
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.http.HttpStatusCode
@@ -33,7 +34,9 @@ import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class ZetaHttpClientBuilderTest {
     @Test
@@ -443,5 +446,72 @@ class ZetaHttpClientBuilderTest {
         // Assert
         assertNotNull(client)
         client.close()
+    }
+
+    @Test
+    fun copy_preservesBaseUrl() {
+        val original = ZetaHttpClientBuilder(baseUrl = "https://example.com")
+        val copy = original.copy()
+
+        assertNotNull(copy.build())
+    }
+
+    @Test
+    fun copy_overridesBaseUrl() {
+        val original = ZetaHttpClientBuilder(baseUrl = "https://original.com")
+        val copy = original.copy(baseUrl = "https://override.com")
+
+        assertNotNull(copy.build())
+    }
+
+    @Test
+    fun copy_preservesCookieStorage() {
+        val customStorage = AcceptAllCookiesStorage()
+        val original = ZetaHttpClientBuilder(cookieStorage = customStorage)
+        val copy = original.copy()
+
+        assertNotNull(copy.build())
+    }
+
+    @Test
+    fun copy_overridesCookieStorage() {
+        val original = ZetaHttpClientBuilder(cookieStorage = AcceptAllCookiesStorage())
+        val newStorage = AcceptAllCookiesStorage()
+        val copy = original.copy(cookieStorage = newStorage)
+
+        assertNotNull(copy.build())
+    }
+
+    @Test
+    fun copy_preservesServerValidation() {
+        val original = ZetaHttpClientBuilder().disableServerValidation(true)
+        val copy = original.copy()
+
+        assertTrue(copy.isServerValidationDisabled)
+    }
+
+    @Test
+    fun copy_preservesServerValidation_whenFalse() {
+        val original = ZetaHttpClientBuilder().disableServerValidation(false)
+        val copy = original.copy()
+
+        assertFalse(copy.isServerValidationDisabled)
+    }
+
+    @Test
+    fun copy_doesNotMutateOriginal() {
+        val original = ZetaHttpClientBuilder(baseUrl = "https://original.com")
+            .disableServerValidation(true)
+        original.copy(baseUrl = "https://other.com")
+
+        assertTrue(original.isServerValidationDisabled)
+    }
+
+    @Test
+    fun copy_preservesContentNegotiation() {
+        val original = ZetaHttpClientBuilder().contentNegotiation(true)
+        val copy = original.copy()
+
+        assertNotNull(copy.build())
     }
 }

@@ -68,9 +68,6 @@ data class ClientAssertionJwt(
 
         @SerialName("client_statement")
         val clientStatement: ClientStatement,
-
-        @SerialName("urn:telematik:client-self-assessment")
-        val clientSelfAssessment: ClientSelfAssessment,
     ) {
         init {
             require(iss.isNotEmpty()) { "Payload iss must be not blank" }
@@ -81,24 +78,6 @@ data class ClientAssertionJwt(
         }
     }
 }
-
-@Serializable
-data class ClientSelfAssessment(
-    /** The name of the client instance, chosen by the user of the client */
-    @SerialName("name") val name: String,
-    /** The client identifier */
-    @SerialName("client_id") val clientId: String,
-    /** The manufacturer identifier */
-    @SerialName("manufacturer_id") val manufacturerId: String,
-    /** The manufacturer name */
-    @SerialName("manufacturer_name") val manufacturerName: String,
-    /** The mail address of the owner */
-    @SerialName("owner_mail") val ownerMail: String,
-    /** The timestamp of the registration in seconds since epoch */
-    @SerialName("registration_timestamp") val registrationTimestamp: Long,
-    /** Contains platform-specific product identifiers. The exact structure is determined by the 'platform' field */
-    @SerialName("platform_product_id") val platformProductId: PlatformProductId,
-)
 
 @Serializable(with = PlatformProductIdSerializer::class)
 sealed class PlatformProductId {

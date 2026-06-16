@@ -47,6 +47,7 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.setBody
 import io.ktor.content.ByteArrayContent
 import io.ktor.http.ContentType
+import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
@@ -75,10 +76,10 @@ import kotlin.time.measureTimedValue
 internal const val DISABLE_SERVER_VALIDATION = "DISABLE_SERVER_VALIDATION"
 internal const val FACHDIENST_URL_REQUIRED_MESSAGE = "fachdienstUrl is required"
 
-internal const val POPP_TOKEN_HEADER_NAME = "PoPP"
+internal const val POPP_TOKEN_HEADER_NAME = "popp"
 
-internal fun shouldForwardHeader(name: String): Boolean {
-    return notForwardedHeaders.none { it.equals(name, ignoreCase = true) }
+internal fun shouldForwardHeader(name: String, filterHostHeaders: Boolean): Boolean {
+    return notForwardedHeaders.none { it.equals(name, ignoreCase = true) } && ((!filterHostHeaders) || optionallyNotForwardedHeaders.none { it.equals(name, ignoreCase = true) })
 }
 
 private val notForwardedHeaders = setOf(
@@ -86,6 +87,13 @@ private val notForwardedHeaders = setOf(
     HttpHeaders.ContentLength,
     HttpHeaders.TransferEncoding,
     HttpHeaders.Connection,
+)
+
+private val optionallyNotForwardedHeaders = setOf(
+    HttpHeaders.Host,
+    HttpHeaders.Forwarded,
+    HttpHeaders.XForwardedHost,
+    HttpHeaders.XForwardedPort,
 )
 
 internal suspend fun forward(
@@ -99,18 +107,15 @@ internal suspend fun forward(
     val forwardStart = TimeSource.Monotonic.markNow()
 
     try {
-        val requestPoppToken = call.request.headers[POPP_TOKEN_HEADER_NAME]
-        val effectivePoppToken = requestPoppToken ?: config.poppToken.ifBlank { null }
-
         val (response, httpTime) = measureTimedValue {
-            executeHttpRequest(httpClient, targetUrl, call, requestBody, effectivePoppToken)
+            executeHttpRequest(httpClient, targetUrl, call, requestBody, config.poppToken.ifBlank { null }, config.filterHostHeaders)
         }
 
         Log.i { "[TESTDRIVER-FORWARD-TIMING] url=$targetUrl method=${call.request.httpMethod.value} http_request=$httpTime status=${response.status}" }
         val (bytes, bodyReadTime) = measureTimedValue { response.body<ByteArray>() }
         Log.i { "[TESTDRIVER-FORWARD-TIMING] url=$targetUrl body_read=$bodyReadTime body_size=${bytes.size}" }
 
-        forwardResponse(call, response, bytes)
+        forwardResponse(call, response, bytes, config.filterHostHeaders)
 
         Log.i { "[TESTDRIVER-DRIVER-FORWARD-TIMING] url=$targetUrl total=${forwardStart.elapsedNow()}" }
     } catch (ex: Throwable) {
@@ -128,21 +133,32 @@ private suspend fun extractRequestBody(call: ApplicationCall): ByteArray? {
     return if (hasBody) call.request.receiveChannel().toByteArray() else null
 }
 
+internal fun buildForwardHeaders(
+    incomingHeaders: Headers,
+    poppToken: String?,
+    filterHostHeaders: Boolean,
+): Headers = Headers.build {
+    incomingHeaders.forEach { name, values ->
+        if (shouldForwardHeader(name, filterHostHeaders)) appendAll(name, values)
+    }
+    if (!incomingHeaders.contains(POPP_TOKEN_HEADER_NAME)) {
+        poppToken?.let { append(POPP_TOKEN_HEADER_NAME, it) }
+    }
+}
+
 private suspend fun executeHttpRequest(
     httpClient: ZetaHttpClient,
     targetUrl: String,
     call: ApplicationCall,
     requestBody: ByteArray?,
     poppToken: String?,
+    filterHostHeaders: Boolean,
 ): ZetaHttpResponse {
+    val forwardHeaders = buildForwardHeaders(call.request.headers, poppToken, filterHostHeaders)
+
     return httpClient.request(targetUrl) {
         method = call.request.httpMethod
-        headers {
-            call.request.headers.forEach { name, values ->
-                if (shouldForwardHeader(name)) headers.appendAll(name, values)
-            }
-            poppToken?.let { headers.append(POPP_TOKEN_HEADER_NAME, it) }
-        }
+        headers { headers.appendAll(forwardHeaders) }
         if (requestBody != null) {
             setRequestBody(this, call, requestBody)
         }
@@ -166,9 +182,10 @@ private suspend fun forwardResponse(
     call: ApplicationCall,
     response: ZetaHttpResponse,
     bytes: ByteArray,
+    filterHostHeaders: Boolean,
 ) {
     response.headers.forEach { (name, value) ->
-        if (shouldForwardHeader(name)) call.response.headers.append(name, value)
+        if (shouldForwardHeader(name, filterHostHeaders)) call.response.headers.append(name, value)
     }
 
     val contentType = response.headers[HttpHeaders.ContentType]?.let(ContentType::parse)
@@ -205,10 +222,7 @@ public suspend fun forwardWs(
 
 private fun wsCustomHeaders(poppToken: String?): Map<String, String> {
     val headers = mutableMapOf<String, String>()
-
-    if (!headers.containsKey(POPP_TOKEN_HEADER_NAME)) {
-        poppToken?.let { headers[POPP_TOKEN_HEADER_NAME] = it }
-    }
+    poppToken?.let { headers[POPP_TOKEN_HEADER_NAME] = it }
 
     return headers
 }
@@ -327,6 +341,7 @@ public fun newSdk(storage: SdkStorage, config: SdkInstanceConfig): ZetaSdkClient
                 .timeouts(20000, 20000)
                 .disableServerValidation(config.disableTlsVerification)
                 .logging(LogLevel.ALL)
+                .contentNegotiation(true)
                 .apply {
                     customCaPems.forEach { pem ->
                         addCaPem(pem)

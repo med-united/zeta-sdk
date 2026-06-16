@@ -37,4 +37,5 @@ public data class SecurityConfig(
     val additionalCaPem: List<String> = emptyList(),
     val additionalCaFile: String? = null,
     val disableServerValidation: Boolean = false,
+    val sslVerbose: Boolean = false,
 )

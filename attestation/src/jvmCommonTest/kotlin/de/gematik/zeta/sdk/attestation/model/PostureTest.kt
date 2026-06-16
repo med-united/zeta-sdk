@@ -25,16 +25,21 @@
 package de.gematik.zeta.sdk.attestation.model
 
 import de.gematik.zeta.platform.PlatformInfo
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 @Suppress("FunctionNaming")
 class PostureTest {
+    // In Phase 1 (Stufe 1) no hardware attestation is included.
+    // Therefore, even for Apple devices, a Software Posture is returned.
     @Test
-    fun buildPostureInternal_returnsApplePosture_whenPlatformIsApple() {
+    fun buildPostureInternal_returnsSoftwarePosture_whenPlatformIsApple() {
         val result = buildPostureInternal(
             platform = Platform.APPLE,
             platformInfo = PlatformInfo(
@@ -42,7 +47,6 @@ class PostureTest {
                 osVersion = "14.5",
                 arch = "arm64",
             ),
-            platformProductId = PlatformProductId.AndroidProductId("apple", "", "", emptyList()),
             productId = "product-id",
             productVersion = "1.2.3",
             attChallenge = "challenge-123",
@@ -52,13 +56,13 @@ class PostureTest {
         requireNotNull(result)
         assertEquals("product-id", result.string("product_id"))
         assertEquals("1.2.3", result.string("product_version"))
-        assertEquals("macOS", result.string("system_name"))
-        assertEquals("14.5", result.string("system_version"))
-        assertEquals("deviceModel", result.string("device_model"))
-        assertEquals("keyId", result.string("key_id"))
-        assertEquals("apple-appattest", result.string("fmt"))
-        assertEquals("signature", result.string("signature"))
-        assertEquals("clientDataJson", result.string("client_data_json"))
+        assertEquals("macOS", result.string("os"))
+        assertEquals("14.5", result.string("os_version"))
+        assertEquals("public-key-abc", result.string("public_key"))
+        assertEquals("challenge-123", result.string("attestation_challenge"))
+
+        // currently not supported on apple & Software Attestation (see ZETAP-1103)
+        assertFalse { result.containsKey("platform_product_id") }
     }
 
     @Test
@@ -84,6 +88,13 @@ class PostureTest {
         assertEquals("x86_64", result.string("arch"))
         assertEquals("public-key-abc", result.string("public_key"))
         assertEquals("challenge-123", result.string("attestation_challenge"))
+
+        assertTrue { result.containsKey("platform_product_id") }
+        val platformProductIdJson: JsonElement? = result.get("platform_product_id")
+        if (platformProductIdJson != null) {
+            val platformProductId = platformProductIdJson.jsonObject
+            assertEquals("linux", platformProductId.string("platform"))
+        }
     }
 
     @Test
@@ -107,6 +118,13 @@ class PostureTest {
         assertEquals("amd64", result.string("arch"))
         assertEquals("public-key-abc", result.string("public_key"))
         assertEquals("challenge-123", result.string("attestation_challenge"))
+
+        assertTrue { result.containsKey("platform_product_id") }
+        val platformProductIdJson: JsonElement? = result.get("platform_product_id")
+        if (platformProductIdJson != null) {
+            val platformProductId = platformProductIdJson.jsonObject
+            assertEquals("windows", platformProductId.string("platform"))
+        }
     }
 
     @Test
@@ -154,7 +172,7 @@ class PostureTest {
 
     @Test
     fun mapPostureType_returnsApple_forMacos() {
-        assertEquals(PostureType.APPLE, mapPostureType(de.gematik.zeta.platform.Platform.Jvm.Macos))
+        assertEquals(PostureType.SOFTWARE, mapPostureType(de.gematik.zeta.platform.Platform.Jvm.Macos))
     }
 
     @Test

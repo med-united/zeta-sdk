@@ -38,4 +38,5 @@ data class AccessTokenRequest(
     @SerialName("client_assertion") val clientAssertion: String,
     @SerialName("scope") val scope: String,
     @SerialName("refresh_token") val refreshToken: String? = null,
+    @SerialName("audience") val audience: String,
 )

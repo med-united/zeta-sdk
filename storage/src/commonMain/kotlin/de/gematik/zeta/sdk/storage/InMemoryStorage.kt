@@ -24,16 +24,27 @@
 
 package de.gematik.zeta.sdk.storage
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
 class InMemoryStorage : SdkStorage {
+    private val mutex = Mutex()
     val map = mutableMapOf<String, String>()
-    override suspend fun put(key: String, value: String) {
+
+    override suspend fun put(key: String, value: String) = mutex.withLock {
         map[key] = value
     }
-    override suspend fun get(key: String): String? = map[key]
-    override suspend fun remove(key: String) {
-        map.remove(key)
+
+    override suspend fun get(key: String): String? = mutex.withLock {
+        map[key]
     }
-    override suspend fun clear() {
+
+    override suspend fun remove(key: String) = mutex.withLock {
+        map.remove(key)
+        Unit
+    }
+
+    override suspend fun clear() = mutex.withLock {
         map.clear()
     }
 }

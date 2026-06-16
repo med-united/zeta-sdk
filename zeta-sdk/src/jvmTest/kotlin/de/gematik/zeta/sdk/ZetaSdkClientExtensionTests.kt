@@ -272,6 +272,26 @@ class ZetaSdkClientExtensionTest {
     }
 
     @Test
+    fun clearRegistration_returnsTrue_whenClientLogoutSucceeds() {
+        val client = FakeZetaSdkClient().apply {
+            logoutResult = Result.success(Unit)
+        }
+        val result = ZetaSdkClientExtension.clearRegistration(client)
+        assertTrue(result)
+        assertTrue(client.logoutCalled)
+    }
+
+    @Test
+    fun clearRegistration_returnsFalse_whenClientLogoutFails() {
+        val client = FakeZetaSdkClient().apply {
+            logoutResult = Result.failure(Exception("Logout failed"))
+        }
+        val result = ZetaSdkClientExtension.clearRegistration(client)
+        assertFalse(result)
+        assertTrue(client.logoutCalled)
+    }
+
+    @Test
     fun status_returnsSuccess_whenClientStatusSucceeds() {
         val client = FakeZetaSdkClient().apply {
             statusResult = Result.success(SdkStatus.HAS_ACCESS_AND_REFRESH_TOKEN)

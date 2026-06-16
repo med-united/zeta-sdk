@@ -5,10 +5,19 @@
 package io.ktor.client.engine.curl.internal
 
 import io.ktor.client.engine.*
+import io.ktor.client.engine.curl.SSL
+import io.ktor.client.engine.curl.SSL_CTRL_GET_TLSEXT_STATUS_REQ_OCSP_RESP
+import io.ktor.client.engine.curl.SSL_CTRL_SET_TLSEXT_STATUS_REQ_TYPE
+import io.ktor.client.engine.curl.SSL_CTX
+import io.ktor.client.engine.curl.SSL_CTX_ctrl
+import io.ktor.client.engine.curl.SSL_ctrl
+import io.ktor.client.engine.curl.TLSEXT_STATUSTYPE_ocsp
 import io.ktor.client.engine.curl.ktor_install_curve_validator
 import io.ktor.client.engine.curl.ktor_install_info_callback
 import io.ktor.client.engine.curl.ktor_ssl_ctx_callback
+import io.ktor.client.engine.curl.tls.TlsValidationConfig
 import io.ktor.client.engine.curl.tls.validateTlsSession
+import io.ktor.client.engine.curl.zeta_install_callbacks
 import io.ktor.client.plugins.*
 import io.ktor.utils.io.*
 import io.ktor.utils.io.core.*
@@ -19,21 +28,54 @@ import kotlinx.io.readByteArray
 import libcurl.*
 import platform.posix.getenv
 
+public var globalRevocationFn: ((staple: ByteArray?, certDer: ByteArray, issuerDer: ByteArray) -> Boolean)? = null
+
+@OptIn(ExperimentalForeignApi::class)
+public fun zetaRevocationFn(
+    certPtr: CPointer<UByteVar>?,
+    certLen: Int,
+    issuerPtr: CPointer<UByteVar>?,
+    issuerLen: Int,
+    staplePtr: CPointer<UByteVar>?,
+    stapleLen: Int,
+): Int {
+    if (certPtr == null || issuerPtr == null) {
+        return 0
+    }
+
+    val certDer = certPtr.readBytes(certLen)
+    val issuerDer = issuerPtr.readBytes(issuerLen)
+    val staple = if (staplePtr != null && stapleLen > 0) staplePtr.readBytes(stapleLen) else null
+
+    val passed = globalRevocationFn?.invoke(staple, certDer, issuerDer) ?: run {
+        true
+    }
+
+    return if (passed) 1 else 0
+}
+
+internal class SslCtxData(
+    val groups: String,
+    val tlsValidationConfig: TlsValidationConfig?,
+)
+
 @OptIn(ExperimentalForeignApi::class)
 private class RequestHolder(
     val responseCompletable: CompletableDeferred<CurlSuccess>,
     val requestWrapper: StableRef<CurlRequestBodyData>,
     val responseWrapper: StableRef<CurlResponseBodyData>,
     val pinnedCurves: Pinned<ByteArray>? = null,
+    val sslCtxDataRef: StableRef<SslCtxData>? = null,
 ) {
     fun dispose() {
         requestWrapper.dispose()
         responseWrapper.dispose()
         pinnedCurves?.unpin()
+        sslCtxDataRef?.dispose()
     }
 }
 
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(UnsafeNumber::class)
 private fun curlSslCtxCallback(
     curl: COpaquePointer?,
     sslCtx: COpaquePointer?,
@@ -42,10 +84,16 @@ private fun curlSslCtxCallback(
     if (sslCtx == null) {
         return CURLE_SSL_CONNECT_ERROR
     }
-    val groups = userptr?.reinterpret<ByteVar>()?.toKString()
-    if (groups.isNullOrEmpty()) {
+
+    val sslCtxData = userptr?.asStableRef<SslCtxData>()?.get() ?: run {
+        return CURLE_OK
+    }
+
+    val groups = sslCtxData.groups
+    if (groups.isEmpty()) {
         return CURLE_SSL_CONNECT_ERROR
     }
+
     val result = ktor_ssl_ctx_callback(curl, sslCtx, groups)
     if (result != 0) {
         return CURLE_SSL_CONNECT_ERROR
@@ -54,7 +102,36 @@ private fun curlSslCtxCallback(
     ktor_install_info_callback(sslCtx.reinterpret())
     ktor_install_curve_validator(sslCtx.reinterpret(), groups)
 
+    SSL_CTX_ctrl(
+        sslCtx.reinterpret(),
+        SSL_CTRL_SET_TLSEXT_STATUS_REQ_TYPE.convert(),
+        TLSEXT_STATUSTYPE_ocsp.convert(),
+        null,
+    )
+
+    zeta_install_callbacks(sslCtx.reinterpret<SSL_CTX>())
+
     return CURLE_OK
+}
+
+@OptIn(ExperimentalForeignApi::class, UnsafeNumber::class)
+private fun extractOcspStaple(easyHandle: EasyHandle): ByteArray? = memScoped {
+    val tlsInfoPtr = alloc<COpaquePointerVar>()
+    curl_easy_getinfo(easyHandle, CURLINFO_TLS_SSL_PTR, tlsInfoPtr.ptr)
+
+    val sessionInfo = tlsInfoPtr.value?.reinterpret<curl_tlssessioninfo>()?.pointed ?: return null
+    if (sessionInfo.backend != CURLSSLBACKEND_OPENSSL) return null
+    val ssl = sessionInfo.internals?.reinterpret<SSL>() ?: return null
+    memScoped {
+        val ptrVar = alloc<CPointerVar<UByteVar>>()
+        val len = SSL_ctrl(
+            ssl,
+            SSL_CTRL_GET_TLSEXT_STATUS_REQ_OCSP_RESP.convert(),
+            0,
+            ptrVar.ptr.reinterpret<COpaquePointerVar>(),
+        )
+        if (len <= 0) null else ptrVar.value?.readBytes(len.toInt())
+    }
 }
 
 @OptIn(ExperimentalForeignApi::class)
@@ -70,15 +147,7 @@ private fun curlDebugCallback(
     val message = data.readBytes(size.toInt()).decodeToString()
 
     when (type) {
-        CURLINFO_TEXT -> {
-            if (message.contains("SSL connection using", ignoreCase = true) ||
-                message.contains("SSL handshake", ignoreCase = true) ||
-                message.contains("cipher", ignoreCase = true) ||
-                message.contains("curve", ignoreCase = true)
-            ) {
-                println("ZetaTls [SSL]: $message")
-            }
-        }
+        CURLINFO_TEXT -> println("Tls [SSL]: $message")
 
         CURLINFO_HEADER_IN -> println("Tls [HEADER IN]:  $message")
 
@@ -103,12 +172,18 @@ internal class CurlMultiApiHandler : Closeable {
     override fun close() {
         if (activeHandles.isNotEmpty()) handleCompleted()
         for ((handle, holder) in activeHandles) {
-            cleanupEasyHandle(handle)
+            val result = curl_multi_remove_handle(multiHandle, handle)
+            if (result != CURLM_OK && result != CURLM_RECURSIVE_API_CALL) {
+                result.verify()
+            }
+            curl_easy_cleanup(handle)
             holder.dispose()
         }
-
         activeHandles.clear()
-        curl_multi_cleanup(multiHandle).verify()
+        val cleanupResult = curl_multi_cleanup(multiHandle)
+        if (cleanupResult != CURLM_OK && cleanupResult != CURLM_RECURSIVE_API_CALL) {
+            cleanupResult.verify()
+        }
     }
 
     fun scheduleRequest(request: CurlRequestData, deferred: CompletableDeferred<CurlSuccess>): EasyHandle {
@@ -128,20 +203,36 @@ internal class CurlMultiApiHandler : Closeable {
         val responseWrapper = responseBody.asStablePointer()
 
         bodyStartedReceiving.invokeOnCompletion {
-            val result = collectSuccessResponse(easyHandle) ?: return@invokeOnCompletion
-            activeHandles[easyHandle]!!.responseCompletable.complete(result)
+            try {
+                val result = collectSuccessResponse(easyHandle) ?: return@invokeOnCompletion
+                activeHandles[easyHandle]!!.responseCompletable.complete(result)
+            } catch (e: Throwable) {
+                activeHandles[easyHandle]!!.responseCompletable.completeExceptionally(e)
+            }
         }
 
         setupMethod(easyHandle, request.method, request.contentLength)
         val requestWrapper = setupUploadContent(easyHandle, request)
         val pinnedCurves = request.sslEcCurves?.encodeToByteArray()?.pin()
+
+        val sslCtxDataRef = if (request.sslVerify && request.tlsValidationConfig != null) {
+            StableRef.create(
+                SslCtxData(
+                    groups = request.sslEcCurves ?: "",
+                    tlsValidationConfig = request.tlsValidationConfig,
+                ),
+            )
+        } else {
+            null
+        }
+
         val requestHolder = RequestHolder(
             deferred,
             requestWrapper.asStableRef(),
             responseWrapper.asStableRef(),
             pinnedCurves,
+            sslCtxDataRef,
         )
-
         activeHandles[easyHandle] = requestHolder
 
         easyHandle.apply {
@@ -154,8 +245,7 @@ internal class CurlMultiApiHandler : Closeable {
             option(CURLOPT_PRIVATE, responseDataRef)
             option(CURLOPT_ACCEPT_ENCODING, "")
 
-            val verboseTls = false
-            if (verboseTls) {
+            if (request.sslVerbose) {
                 option(CURLOPT_VERBOSE, 1L)
                 option(CURLOPT_DEBUGFUNCTION, staticCFunction(::curlDebugCallback))
                 option(CURLOPT_DEBUGDATA, responseDataRef)
@@ -179,29 +269,40 @@ internal class CurlMultiApiHandler : Closeable {
             if (!request.sslVerify) {
                 option(CURLOPT_SSL_VERIFYPEER, 0L)
                 option(CURLOPT_SSL_VERIFYHOST, 0L)
-            }
+            } else {
+                request.sslCipherList?.let { list -> option(CURLOPT_SSL_CIPHER_LIST, list) }
+                request.tls13Ciphers?.let { option(CURLOPT_TLS13_CIPHERS, it) }
+                request.sslEcCurves?.let { option(CURLOPT_SSL_EC_CURVES, it) }
+                request.sslSignatureAlgorithms?.let { option(CURLOPT_SSL_SIGNATURE_ALGORITHMS, it) }
+                option(CURLOPT_SSLVERSION, request.sslVersion.curlValue)
 
+                sslCtxDataRef?.let {
+                    option(CURLOPT_SSL_CTX_FUNCTION, staticCFunction(::curlSslCtxCallback))
+                    option(CURLOPT_SSL_CTX_DATA, it.asCPointer())
+                }
+            }
             if (request.sslVerifyStatus) {
                 option(CURLOPT_SSL_VERIFYSTATUS, 1L)
             }
-            request.caPath?.let { option(CURLOPT_CAPATH, it) }
-            request.caInfo?.let { option(CURLOPT_CAINFO, it) }
-
-            request.sslCipherList?.let { list -> option(CURLOPT_SSL_CIPHER_LIST, list) }
-            request.tls13Ciphers?.let { option(CURLOPT_TLS13_CIPHERS, it) }
-            request.sslEcCurves?.let { option(CURLOPT_SSL_EC_CURVES, it) }
-
-            pinnedCurves?.let {
-                option(CURLOPT_SSL_CTX_FUNCTION, staticCFunction(::curlSslCtxCallback))
-                option(CURLOPT_SSL_CTX_DATA, it.addressOf(0))
+            request.caPath?.let {
+                option(CURLOPT_CAPATH, it)
             }
-
-            request.sslSignatureAlgorithms?.let { option(CURLOPT_SSL_SIGNATURE_ALGORITHMS, it) }
-            option(CURLOPT_SSLVERSION, request.sslVersion.curlValue)
+            request.caPemBlob?.takeIf { it.isNotEmpty() }?.let { pemBytes ->
+                memScoped {
+                    val pinned = pemBytes.pin()
+                    val blob = alloc<curl_blob>()
+                    blob.data = pinned.addressOf(0)
+                    blob.len = pemBytes.size.toULong()
+                    blob.flags = CURL_BLOB_COPY.toUInt()
+                    curl_easy_setopt(easyHandle, CURLOPT_CAINFO_BLOB, blob.ptr)
+                    pinned.unpin()
+                }
+            } ?: request.caInfo?.let {
+                option(CURLOPT_CAINFO, it)
+            }
         }
 
         curl_multi_add_handle(multiHandle, easyHandle).verify()
-
         return easyHandle
     }
 
@@ -416,7 +517,9 @@ internal class CurlMultiApiHandler : Closeable {
 
         val responseBuilder = responseDataRef.value!!.fromCPointer<CurlResponseBuilder>()
         if (responseBuilder.request.sslVerify && validateTls) {
-            validateTlsSession(easyHandle, responseBuilder.request.tlsValidationConfig)
+            val staple = extractOcspStaple(easyHandle)
+            validateTlsSession(easyHandle, responseBuilder.request.tlsValidationConfig, staple)
+            responseBuilder.request.tlsValidationConfig?.lastError?.let { throw it }
         }
 
         with(responseBuilder) {
@@ -443,7 +546,10 @@ internal class CurlMultiApiHandler : Closeable {
     }
 
     private fun cleanupEasyHandle(easyHandle: EasyHandle) {
-        curl_multi_remove_handle(multiHandle, easyHandle).verify()
+        val result = curl_multi_remove_handle(multiHandle, easyHandle)
+        if (result != CURLM_OK && result != CURLM_RECURSIVE_API_CALL) {
+            result.verify()
+        }
         curl_easy_cleanup(easyHandle)
     }
 
@@ -452,3 +558,10 @@ internal class CurlMultiApiHandler : Closeable {
         val pollTimeout by lazy { getenv("KTOR_CURL_POLL_TIMEOUT")?.toKString()?.toInt() ?: DEFAULT_POLL_TIMEOUT_MS }
     }
 }
+
+public data class PendingRevocationData(
+    val stapledOcspResponse: ByteArray?,
+    val certDer: ByteArray,
+    val issuerDer: ByteArray,
+    val onValidate: suspend (ByteArray?, ByteArray, ByteArray) -> Unit,
+)

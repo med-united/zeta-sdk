@@ -24,6 +24,7 @@
 
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
+import de.gematik.zeta.sdk.configuration.models.AuthorizationServerMetadata
 import de.gematik.zeta.sdk.flow.CapabilityResult
 import de.gematik.zeta.sdk.flow.FakeApi
 import de.gematik.zeta.sdk.flow.FakeValidator
@@ -34,17 +35,20 @@ import de.gematik.zeta.sdk.flow.getDummyProtectedResourceObject
 import de.gematik.zeta.sdk.flow.handler.ConfigurationHandler
 import de.gematik.zeta.sdk.flow.handler.ConfigurationHandler.ConfigurationError
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
-import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * Unit tests for [ConfigurationHandler].
  */
 class ConfigurationHandlerTest {
+
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     @Test
     fun canHandle_onlyConfigurationFiles() {
@@ -168,15 +172,12 @@ class ConfigurationHandlerTest {
     }
 
     @Test
-    @Ignore
     fun handle_throwsValidationException_whenSchemaValidationFails() = runTest {
         // Arrange
         val resource = "https://api.example.com"
         val api = FakeApi(
-            resJson =
-            mapOf(
-                resource to
-                    Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(resource))),
+            resJson = mapOf(
+                resource to Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(resource))),
             ),
             authJson = mapOf(resource to Json.encodeToString(getDummyAuthServerObject(resource))),
         )
@@ -192,19 +193,16 @@ class ConfigurationHandlerTest {
     }
 
     @Test
-    @Ignore
     fun handle_throwsException_whenValidationThrowsAnException() = runTest {
         // Arrange
         val resource = "https://api.example.com"
         val api = FakeApi(
-            resJson =
-            mapOf(
-                resource to
-                    Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(resource))),
+            resJson = mapOf(
+                resource to Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(resource))),
             ),
             authJson = mapOf(resource to Json.encodeToString(getDummyAuthServerObject(resource))),
         )
-        val validator = FakeValidator(isValid = true, 0, true)
+        val validator = FakeValidator(isValid = true, throwsException = true)
         val h = ConfigurationHandler(api, createAuthConfig(), validator)
         val ctx = getDummyFlowContext()
 
@@ -213,6 +211,39 @@ class ConfigurationHandlerTest {
             h.handle(FlowNeed.ConfigurationFiles, ctx)
         }
         assertTrue(ex.message!!.contains("Validation threw for"))
+    }
+
+    @Test
+    fun handle_throwsException_whenAuthServerMetadataMissingRegistrationEndpoint() = runTest {
+        // Arrange
+        val resource = "https://api.example.com"
+        val issuer = "https://auth.example.com"
+        val invalidAuthJson = """
+        {
+            "issuer": "$issuer",
+            "authorization_endpoint": "$issuer/auth",
+            "token_endpoint": "$issuer/token",
+            "nonce_endpoint": "$issuer/nonce",
+            "jwks_uri": "$issuer/jwks",
+            "scopes_supported": ["zero:audience"],
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"],
+            "token_endpoint_auth_methods_supported": ["private_key_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["ES256"],
+            "code_challenge_methods_supported": ["S256"]
+        }
+        """.trimIndent()
+        val api = FakeApi(
+            resJson = mapOf(resource to Json.encodeToString(getDummyProtectedResourceObject(resource, listOf(issuer)))),
+            authJson = mapOf(issuer to invalidAuthJson),
+        )
+
+        val h = ConfigurationHandler(api, createAuthConfig())
+        val ctx = getDummyFlowContext()
+
+        assertFailsWith<ConfigurationError.ValidationFailed> {
+            h.handle(FlowNeed.ConfigurationFiles, ctx)
+        }
     }
 
     @Test
@@ -238,9 +269,116 @@ class ConfigurationHandlerTest {
         assertTrue(ex.message!!.contains("Scopes are not supported by server: [missing_scope]"))
     }
 
-    private fun createAuthConfig(scopes: List<String> = emptyList()) =
-        AuthConfig(
-            scopes, 300, true,
-            SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")), requiredRoleOid = "1.2.276.0.76.4.261",
+    @Test
+    fun deserializesRequiredFields() {
+        val metadata = json.decodeFromString<AuthorizationServerMetadata>(minimalJson())
+        assertEquals("https://auth.example.com", metadata.issuer)
+        assertEquals("https://auth.example.com/auth", metadata.authorizationEndpoint)
+        assertEquals("https://auth.example.com/token", metadata.tokenEndpoint)
+        assertEquals("https://auth.example.com/nonce", metadata.nonceEndpoint)
+        assertEquals("https://auth.example.com/register", metadata.registrationEndpoint)
+        assertEquals("https://auth.example.com/jwks", metadata.jwksUri)
+        assertEquals(listOf("zero:audience"), metadata.scopesSupported)
+        assertEquals(listOf("code"), metadata.responseTypesSupported)
+        assertEquals(listOf("authorization_code"), metadata.grantTypesSupported)
+        assertEquals(listOf("private_key_jwt"), metadata.tokenEndpointAuthMethodsSupported)
+        assertEquals(listOf("ES256"), metadata.tokenEndpointAuthSigningAlgValuesSupported)
+        assertEquals(listOf("S256"), metadata.codeChallengeMethodsSupported)
+    }
+
+    @Test
+    fun optionalFieldsAreNullWhenAbsent() {
+        val metadata = json.decodeFromString<AuthorizationServerMetadata>(minimalJson())
+        assertNull(metadata.openidProvidersEndpoint)
+        assertNull(metadata.responseModesSupported)
+        assertNull(metadata.serviceDocumentation)
+        assertNull(metadata.uiLocalesSupported)
+    }
+
+    @Test
+    fun deserializesOptionalFields() {
+        val metadata = json.decodeFromString<AuthorizationServerMetadata>(fullJson())
+        assertEquals("https://auth.example.com/openid", metadata.openidProvidersEndpoint)
+        assertEquals(listOf("query"), metadata.responseModesSupported)
+        assertEquals("https://auth.example.com/docs", metadata.serviceDocumentation)
+        assertEquals(listOf("en", "de"), metadata.uiLocalesSupported)
+    }
+
+    @Test
+    fun ignoresUnknownFields() {
+        val withExtra = minimalJson().dropLast(1) + """, "unknown_field": "ignored" }"""
+        val metadata = json.decodeFromString<AuthorizationServerMetadata>(withExtra)
+        assertEquals("https://auth.example.com", metadata.issuer)
+    }
+
+    @Test
+    fun fallsBackToOpenidProvidersEndpointWhenRegistrationEndpointMissing() {
+        val legacyJson = minimalJson()
+            .replace(
+                """"registration_endpoint": "https://auth.example.com/register",""",
+                """
+            "openid_providers_endpoint": "https://auth.example.com/openid",
+                """.trimIndent(),
+            )
+
+        val metadata = Json.decodeFromString<AuthorizationServerMetadata>(legacyJson)
+
+        assertEquals(
+            "https://auth.example.com/openid",
+            metadata.effectiveRegistrationEndpoint,
         )
+    }
+
+    @Test
+    fun failsWhenIssuerMissing() {
+        val withoutIssuer = minimalJson()
+            .replace(""""issuer": "https://auth.example.com",""", "")
+        assertFailsWith<SerializationException> {
+            Json.decodeFromString<AuthorizationServerMetadata>(withoutIssuer)
+        }
+    }
+
+    private fun minimalJson() = """
+        {
+            "issuer": "https://auth.example.com",
+            "authorization_endpoint": "https://auth.example.com/auth",
+            "token_endpoint": "https://auth.example.com/token",
+            "nonce_endpoint": "https://auth.example.com/nonce",
+            "registration_endpoint": "https://auth.example.com/register",
+            "jwks_uri": "https://auth.example.com/jwks",
+            "scopes_supported": ["zero:audience"],
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"],
+            "token_endpoint_auth_methods_supported": ["private_key_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["ES256"],
+            "code_challenge_methods_supported": ["S256"]
+        }
+    """.trimIndent()
+
+    private fun fullJson() = """
+        {
+            "issuer": "https://auth.example.com",
+            "authorization_endpoint": "https://auth.example.com/auth",
+            "token_endpoint": "https://auth.example.com/token",
+            "nonce_endpoint": "https://auth.example.com/nonce",
+            "registration_endpoint": "https://auth.example.com/register",
+            "openid_providers_endpoint": "https://auth.example.com/openid",
+            "jwks_uri": "https://auth.example.com/jwks",
+            "scopes_supported": ["zero:audience"],
+            "response_types_supported": ["code", "token", "id_token"],
+            "response_modes_supported": ["query"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "token_endpoint_auth_methods_supported": ["private_key_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["ES256"],
+            "service_documentation": "https://auth.example.com/docs",
+            "ui_locales_supported": ["en", "de"],
+            "code_challenge_methods_supported": ["S256"]
+        }
+    """.trimIndent()
 }
+
+private fun createAuthConfig(scopes: List<String> = emptyList()) =
+    AuthConfig(
+        scopes, 300, true,
+        SmbTokenProvider(SmbTokenProvider.Credentials("", "", "")), requiredRoleOid = "1.2.276.0.76.4.261",
+    )
