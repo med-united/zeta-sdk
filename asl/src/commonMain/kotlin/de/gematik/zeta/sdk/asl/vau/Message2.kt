@@ -27,6 +27,7 @@ package de.gematik.zeta.sdk.asl.vau
 import de.gematik.zeta.logging.Log
 import de.gematik.zeta.sdk.asl.AslCertDataApi
 import de.gematik.zeta.sdk.asl.AslTiRootStore
+import de.gematik.zeta.sdk.asl.CertData
 import de.gematik.zeta.sdk.asl.EncapsulationResult
 import de.gematik.zeta.sdk.asl.Environment
 import de.gematik.zeta.sdk.asl.HttpCertDataFetcher
@@ -40,7 +41,6 @@ import de.gematik.zeta.sdk.asl.SignedVauPublicKeys
 import de.gematik.zeta.sdk.asl.VauKeys
 import de.gematik.zeta.sdk.asl.VauPairKeys
 import de.gematik.zeta.sdk.asl.cbor
-import de.gematik.zeta.sdk.asl.validateRevocation
 import de.gematik.zeta.sdk.crypto.AesGcmCipherImpl
 import de.gematik.zeta.sdk.crypto.EcPointP256
 import de.gematik.zeta.sdk.crypto.EcdhSigner
@@ -52,6 +52,7 @@ import de.gematik.zeta.sdk.crypto.hashWithSha256
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
 import de.gematik.zeta.sdk.network.http.client.config.tls.sanMatchesHost
 import de.gematik.zeta.sdk.network.http.client.hostOf
+import de.gematik.zeta.sdk.network.http.client.validateRevocation
 import io.ktor.client.request.HttpRequestBuilder
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlin.time.Clock
@@ -215,65 +216,95 @@ internal suspend fun validateSignedVauPublicKeys(
     environment: Environment = Environment.Production,
     requiredRoleOid: String,
 ) {
+    decodeAndValidateVauKeys(signed, clock)
+
+    val certData = validation.certDataFetcher.fetch(
+        signed.certificateHash.toHexString(),
+        signed.certificateDescriptionVersion,
+    )
+
+    val resourceHost = hostOf(validation.http.request.url.toString())
+
+    validateCertificate(certData, resourceHost, validation)
+    validateChain(certData, validation)
+    validateRoleOid(certData.cert, requiredRoleOid, validation.certChainValidator)
+    validateRevocation(
+        stapledOcspResponse = signed.ocspResponse.takeIf { it.isNotEmpty() },
+        certDer = certData.cert,
+        issuerDer = certData.ca,
+        ocspValidator = validation.ocspValidator,
+        httpClient = validation.http.client.delegate,
+        maxOcspAgeSeconds = 24 * 3600,
+        allowSkipForTestCertificates = environment != Environment.Production,
+    )
+    validateSignature(signed, certData.cert, validation)
+}
+
+@OptIn(ExperimentalSerializationApi::class)
+internal fun decodeAndValidateVauKeys(
+    signed: SignedVauPublicKeys,
+    clock: Clock = Clock.System,
+): VauKeys {
     val vauKeys = cbor.decodeFromByteArray(VauKeys.serializer(), signed.signedPublicKeys)
-    val nowEpoch = clock.now().epochSeconds
-
-    validateVauKeyLifetime(vauKeys.expiresAt, vauKeys.issuedAt, nowEpoch)
-
+    validateVauKeyLifetime(vauKeys.expiresAt, vauKeys.issuedAt, clock.now().epochSeconds)
     require(vauKeys.ecdhPublicKey.crv == "P-256") {
         "ECDH key must use P-256, got ${vauKeys.ecdhPublicKey.crv}"
     }
     require(vauKeys.ecdhPublicKey.x.size == 32 && vauKeys.ecdhPublicKey.y.size == 32) {
         "ECDH coordinates must be 32 bytes each"
     }
-
     require(vauKeys.mlKemPublicKey.size == 1184) {
         "ML-KEM-768 key must be 1184 bytes, got ${vauKeys.mlKemPublicKey.size}"
     }
+    return vauKeys
+}
 
-    val certHashHex = signed.certificateHash.toHexString()
-    Log.i { "version: ${signed.certificateDescriptionVersion} hash: ${signed.certificateHash.toHexString()}" }
-    val certData = validation.certDataFetcher.fetch(certHashHex, signed.certificateDescriptionVersion)
-
-    val resourceHost = hostOf(validation.http.request.url.toString())
-
+internal fun validateCertificate(
+    certData: CertData,
+    resourceHost: String,
+    validation: CertValidationBundle,
+) {
     validateSan(certData.cert, resourceHost, validation.certChainValidator)
-
     validation.certChainValidator.checkValidity(certData.cert)
+}
 
+internal fun validateChain(
+    certData: CertData,
+    validation: CertValidationBundle,
+) {
     val chain = buildList {
         add(certData.cert)
         if (certData.ca.isNotEmpty()) add(certData.ca)
         addAll(certData.rcaChain.filter { it.isNotEmpty() })
     }
-
     if (validation.tiTrustAnchors.isEmpty()) {
         error("Chain validation aborted: no TI trust anchors loaded")
     }
     if (chain.size <= 1) {
         error("Chain validation aborted: incomplete chain (size=${chain.size})")
     }
-
     validation.certChainValidator.validateCertChain(chain, validation.tiTrustAnchors)
+}
 
-    val certRoleOids = validation.certChainValidator.getProfessionOids(certData.cert)
+internal fun validateRoleOid(
+    certDer: ByteArray,
+    requiredRoleOid: String,
+    certChainValidator: X509CertValidator,
+) {
+    val certRoleOids = certChainValidator.getProfessionOids(certDer)
     require(requiredRoleOid in certRoleOids) {
         "TI certificate missing required Role-OID: required=$requiredRoleOid, " +
             "present=${certRoleOids.joinToString()}"
     }
     Log.i { "Role-OID validated: $requiredRoleOid" }
+}
 
-    validateRevocation(
-        stapledOcspResponse = signed.ocspResponse.takeIf { it.isNotEmpty() },
-        certDer = certData.cert,
-        issuerDer = certData.ca,
-        ocspValidator = validation.ocspValidator,
-        httpClient = validation.http.client,
-        maxOcspAgeSeconds = 24 * 3600,
-        allowSkipForTestCertificates = environment != Environment.Production,
-    )
-
-    val signingPubKey = validation.certChainValidator.getPublicKey(certData.cert)
+internal fun validateSignature(
+    signed: SignedVauPublicKeys,
+    certDer: ByteArray,
+    validation: CertValidationBundle,
+) {
+    val signingPubKey = validation.certChainValidator.getPublicKey(certDer)
     require(
         validation.ecdhSigner.verify(
             publicKey = signingPubKey,

@@ -64,53 +64,73 @@ public object ZetaCertificateValidator {
         public const val MIN_EC_KEY_BITS: Int = EC_P256_KEY_SIZE_BITS
     }
 
-    public fun validate(cert: ZetaCertInfo, nowEpochSeconds: Long, host: String? = null): CertificateValidationResult {
-        val errors = mutableListOf<String>()
-        val sigAlg = cert.sigAlgName.normalize()
-
-        if (sigAlg in ZetaCertificateAlgorithms.FORBIDDEN_SIGNATURE_ALGORITHMS) {
-            errors += "Forbidden signature algorithm '${cert.sigAlgName}' in cert: ${cert.subjectDN}"
-        } else if (sigAlg !in ZetaCertificateAlgorithms.ALLOWED_SIGNATURE_ALGORITHMS) {
-            errors += "Signature algorithm '${cert.sigAlgName}' is not allowed"
+    public fun validate(
+        cert: ZetaCertInfo,
+        nowEpochSeconds: Long,
+        host: String? = null,
+        isLeaf: Boolean = true,
+    ): CertificateValidationResult {
+        val errors = buildList {
+            addAll(validateSignatureAlgorithm(cert, isLeaf))
+            addAll(validateKeyAlgorithm(cert, isLeaf))
+            addAll(validateValidity(cert, nowEpochSeconds))
+            if (host != null) addAll(validateSan(cert, host))
         }
-
-        when (val keyAlg = cert.keyAlgorithm.uppercase()) {
-            "EC" -> {
-                if (cert.keySize < MIN_EC_KEY_BITS) {
-                    errors += "EC key too small: ${cert.keySize} (min: $MIN_EC_KEY_BITS)"
-                }
-                val curve = cert.curveName
-                if (curve == null) {
-                    errors += "EC certificate has no named curve"
-                } else if (curve.normalize() !in ALLOWED_CURVES_NORMALIZED) {
-                    errors += "EC curve '$curve' is not allowed"
-                }
-            }
-            else -> errors += "Key algorithm '$keyAlg' is not allowed: only EC keys are supported"
-        }
-
-        if (nowEpochSeconds < cert.notBefore) {
-            errors += "Certificate not yet valid: ${cert.subjectDN}"
-        }
-        if (nowEpochSeconds > cert.notAfter) {
-            errors += "Certificate has expired: ${cert.subjectDN}"
-        }
-
-        if (host != null) {
-            val matched = cert.san.any { sanMatchesHost(it, host) }
-            if (!matched) {
-                errors += "Certificate SAN does not match host '$host': ${cert.san}"
-            }
-        }
-
         return CertificateValidationResult(errors.isEmpty(), errors, emptyList())
     }
+
+    private fun validateSignatureAlgorithm(cert: ZetaCertInfo, isLeaf: Boolean): List<String> {
+        val sigAlg = cert.sigAlgName.normalize()
+        return when {
+            sigAlg in ZetaCertificateAlgorithms.FORBIDDEN_SIGNATURE_ALGORITHMS ->
+                listOf("Forbidden signature algorithm '${cert.sigAlgName}' in cert: ${cert.subjectDN}")
+            isLeaf && sigAlg !in ZetaCertificateAlgorithms.ALLOWED_SIGNATURE_ALGORITHMS ->
+                listOf("Signature algorithm '${cert.sigAlgName}' is not allowed")
+            else -> emptyList()
+        }
+    }
+
+    private fun validateKeyAlgorithm(cert: ZetaCertInfo, isLeaf: Boolean): List<String> =
+        when (cert.keyAlgorithm.uppercase()) {
+            "EC" -> validateEcKey(cert)
+            else -> if (isLeaf) listOf("Key algorithm '${cert.keyAlgorithm}' is not allowed") else emptyList()
+        }
+
+    private fun validateEcKey(cert: ZetaCertInfo): List<String> = buildList {
+        if (cert.keySize < MIN_EC_KEY_BITS) {
+            add("EC key too small: ${cert.keySize} (min: $MIN_EC_KEY_BITS)")
+        }
+        when (cert.curveName) {
+            null -> add("EC certificate has no named curve")
+            else -> if (cert.curveName.normalize() !in ALLOWED_CURVES_NORMALIZED) {
+                add("EC curve '${cert.curveName}' is not allowed")
+            }
+        }
+    }
+
+    private fun validateValidity(cert: ZetaCertInfo, nowEpochSeconds: Long): List<String> = buildList {
+        if (nowEpochSeconds < cert.notBefore) add("Certificate not yet valid: ${cert.subjectDN}")
+        if (nowEpochSeconds > cert.notAfter) add("Certificate has expired: ${cert.subjectDN}")
+    }
+
+    private fun validateSan(cert: ZetaCertInfo, host: String): List<String> =
+        if (cert.san.none { sanMatchesHost(it, host) }) {
+            listOf("Certificate SAN does not match host '$host': ${cert.san}")
+        } else {
+            emptyList()
+        }
 
     public fun validateChain(
         chain: List<ZetaCertInfo>,
         nowEpochSeconds: Long,
     ): CertificateValidationResult {
-        val results = chain.map { validate(it, nowEpochSeconds) }
+        val results = chain.mapIndexed { index, cert ->
+            validate(
+                cert = cert,
+                nowEpochSeconds = nowEpochSeconds,
+                isLeaf = index == 0,
+            )
+        }
         return CertificateValidationResult(
             isValid = results.all { it.isValid },
             errors = results.flatMap { it.errors },

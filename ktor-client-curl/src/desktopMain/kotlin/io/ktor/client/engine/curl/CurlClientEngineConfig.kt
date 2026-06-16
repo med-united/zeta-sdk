@@ -33,6 +33,11 @@ public class CurlClientEngineConfig : HttpClientEngineConfig() {
     public var caPath: String? = null
 
     /**
+     * Sets CA certificate(s) in PEM format as an in-memory blob using `CURLOPT_CAINFO_BLOB`
+     */
+    public var caPemBlob: ByteArray? = null
+
+    /**
      * Enables TLS host and certificate verification by setting the
      * `CURLOPT_SSL_VERIFYPEER` and `CURLOPT_SSL_VERIFYHOST` options.
      * Similar to `-k/--insecure` curl option.
@@ -44,9 +49,10 @@ public class CurlClientEngineConfig : HttpClientEngineConfig() {
     public var sslVerify: Boolean = true
     public var sslCipherList: String? = null
     public var tls13Ciphers: String? = null
-    public var sslVersion: SslVersion = SslVersion.TLS_1_2
+    public var sslVersion: SslVersion = SslVersion.TLS_1_2_TO_1_3
     public var sslEcCurves: String? = null
     public var sslSignatureAlgorithms: String? = null
     public var tlsValidationConfig: TlsValidationConfig? = null
-    public var sslVerifyStatus: Boolean = true
+    public var sslVerifyStatus: Boolean = false
+    public var sslVerbose: Boolean = false
 }

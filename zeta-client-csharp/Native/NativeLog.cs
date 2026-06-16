@@ -1,4 +1,3 @@
-
 /*
  * #%L
  * ZETA-Client
@@ -41,7 +40,7 @@ internal sealed class CustomLogHandle
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void LogDelegate(IntPtr ctx, IntPtr level, IntPtr tag, IntPtr message);
 
-    public CustomLogHandle(Action<string, string?, string> logger)
+    public CustomLogHandle(Action<string, string?, string> logger, int logLevel = 0)
     {
         _log = (ctx, level, tag, message) =>
         {

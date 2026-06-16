@@ -39,6 +39,11 @@ interface ClientRegistrationStorage {
 }
 
 class ClientRegistrationStorageImpl(private val sdkStorage: SdkStorage) : ClientRegistrationStorage {
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+    }
+
     companion object Companion {
         private const val CLIENT_REGISTRATION_BY_AUTH_SERVER_KEY = "client_registration_by_auth_server"
     }
@@ -48,7 +53,7 @@ class ClientRegistrationStorageImpl(private val sdkStorage: SdkStorage) : Client
         Log.d { "Saving client registration for AS: $authServer" }
         val key = hostOf(authServer)
         val map = storage.getMap(CLIENT_REGISTRATION_BY_AUTH_SERVER_KEY) ?: mutableMapOf()
-        map[key] = Json.encodeToString(registrationResponse)
+        map[key] = json.encodeToString(registrationResponse)
 
         storage.putMap(CLIENT_REGISTRATION_BY_AUTH_SERVER_KEY, map)
     }
@@ -60,7 +65,9 @@ class ClientRegistrationStorageImpl(private val sdkStorage: SdkStorage) : Client
         val map = storage.getMap(CLIENT_REGISTRATION_BY_AUTH_SERVER_KEY) ?: return null
         val raw = map[key] ?: return null
 
-        return runCatching { Json.decodeFromString<ClientRegistrationResponse>(raw) }
+        return runCatching {
+            json.decodeFromString<ClientRegistrationResponse>(raw)
+        }
             .onFailure { e -> Log.e { "Failed to decode registration for $key: ${e.message}" } }
             .getOrNull()
     }

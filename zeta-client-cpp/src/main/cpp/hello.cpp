@@ -296,6 +296,11 @@ void runHttpClientSample(ZetaSdk_HttpClient* zetaHttpClient, char* poppToken) {
     std::cout.flush();
 }
 
+void my_custom_log(void* ctx, const char* level, const char* tag, const char* message) {
+    std::cout << "[" << level << "] [" << (tag ? tag : "Zeta") << "] " << message << "\n";
+    std::cout.flush();
+}
+
 int main() {
     std::cout << "Hello from C++!\n";
     std::cout.flush();
@@ -376,17 +381,39 @@ int main() {
             &smbConfig,
             &smcbConfig
     };
+
+    // Custom log callback
+    ZetaSdk_LogVTable logVTable = {
+            nullptr,
+            my_custom_log,
+            ZETA_LOG_LEVEL_DEBUG
+    };
+
+    char* caPem[] = {
+            const_cast<char*>(R"(-----BEGIN CERTIFICATE-----
+...
+                -----END CERTIFICATE-----)")
+    };
+
+    ZetaSdk_SecurityConfig security = {};
+    security.additionalCaPem = const_cast<char**>(caPem);
+    security.additionalCaPemCount = 1;
+    //security.additionalCaFile = const_cast<char*>(caPemFile);
+    //security.disableServerValidation = disableTls;
+    //security.sslVerbose = false;
+
     ZetaSdk_BuildConfig buildConfig = {
             resource,
             productId,
             productVersion,
             clientName,
-            &storageConfig,
-            &tpmConfig,
-            &authConfig
+            &storageConfig, &tpmConfig, &authConfig,
+            &logVTable,
+            nullptr,
+            &security
     };
 
-    ZetaSdk_Client* zetaSdkClient = (ZetaSdk_Client*)ZetaSdk_buildZetaClient(&buildConfig, disableTlsValidation);
+    ZetaSdk_Client* zetaSdkClient = (ZetaSdk_Client*)ZetaSdk_buildZetaClient(&buildConfig);
     ZetaSdk_HttpClient* zetaHttpClient = (ZetaSdk_HttpClient*)ZetaSdk_buildHttpClient(zetaSdkClient);
 
     runHttpClientSample(zetaHttpClient, poppToken);

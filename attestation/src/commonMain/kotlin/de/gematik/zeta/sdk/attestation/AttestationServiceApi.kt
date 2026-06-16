@@ -62,6 +62,11 @@ class AttestationServiceApi(
     private val config: TpmAttestationServiceConfig,
     private val zetaHttpClient: ZetaHttpClient,
 ) : AttestationService {
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+    }
+
     @Volatile
     private var currentStatus: AttestationStatus = AttestationStatus.OK
     private var websocketJob: Job? = null
@@ -157,7 +162,7 @@ class AttestationServiceApi(
     }
 
     private fun handleTextFrame(frame: Frame.Text) {
-        val response = Json.decodeFromString<VerifyIntegrityResponse>(frame.readText())
+        val response = json.decodeFromString<VerifyIntegrityResponse>(frame.readText())
         if (response.success) {
             Log.d { "Integrity check passed" }
             updateStatus(AttestationStatus.OK)

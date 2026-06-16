@@ -24,13 +24,17 @@
 
 package io.ktor.client.engine.curl.tls
 
+import io.ktor.client.engine.curl.internal.PendingRevocationData
+
 data class TlsSessionData(
     val protocol: String?,
     val cipherSuite: String?,
     val leafCertInfo: LeafCertInfo?,
     val host: String? = null,
+    val staple: ByteArray? = null,
 )
 
 data class TlsValidationConfig(
-    val onSessionValidated: ((TlsSessionData) -> Unit)? = null,
+    val onSessionValidated: (TlsSessionData) -> PendingRevocationData?,
+    var lastError: Throwable? = null,
 )

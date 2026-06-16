@@ -34,6 +34,7 @@ import io.ktor.client.plugins.DefaultRequest
 import io.ktor.client.plugins.HttpRequestRetry
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
@@ -135,6 +136,10 @@ internal fun zetaHttpClient(
         install(ContentNegotiation) {
             Log.i { "Installing ContentNegotiation JSON plugin" }
             json(Json { ignoreUnknownKeys = true; isLenient = true })
+        }
+
+        install(HttpCookies) {
+            storage = cfg.cookieStorage
         }
 
         addExtras?.invoke(this)

@@ -139,7 +139,7 @@ open class AccessTokenProviderImpl(
                     params.clientId,
                     dpopKey,
                     nonce,
-                    params.audience,
+                    tokenEndpoint,
                     clock(),
                     authConfig.exp,
                     tpmProvider,
@@ -205,6 +205,7 @@ open class AccessTokenProviderImpl(
                 refreshToken = refreshToken,
                 subjectToken = subjectTokenValue,
                 subjectTokenType = subjectTokenType,
+                audience = params.audience,
             )
 
             val sendEpoch = clock()

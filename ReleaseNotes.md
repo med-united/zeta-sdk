@@ -1,7 +1,7 @@
 
 # RELEASE NOTES
 
-## Version: v1.0.1
+## Version: v1.2.0
 
 This version implements the ZETA protocol for the ZETA client SDK.
 
@@ -30,6 +30,42 @@ It provides SDK bindings for kotlin (as original implementation), Java, and C++.
 - C# client build
 
 ### Known issues:
+
+## Changes in 1.2.0 (from 1.0.2)
+
+### New Features
+
+- More API Methods in C/C# API (discover, authenticate, ...)
+- Proxy configuration for C/C# clients
+- Security Configuration in C/C# clients (e.g. add your own CAs)
+- Cookie management in HTTP client to support load balancing
+- clearRegistration() API method added
+
+### Specification Updates
+
+- Schema-Updates for AS-well-known, lenient Json validation
+- Use of registration_endpoint,
+- Removal of Client Self Assessment (urn:telematik:client-self-assessment attribute)
+
+### Bug fixes
+
+- Use of correct audience in Subject Token and token request parameter
+- Findings in OCSP validation (JVM und Native SDKs)
+- TLS optimizations and fixes
+- Always send Software Statements as those are the ones we support currently
+- Remove leftover hardcoded profession OID check
+- OCSP validation fixes:
+  - issuer cert passed explicitly to OCSP_basic_verify for signature validation
+  - nextUpdate handling fixed
+- Proxy password sent as literal string instead of pointer representation
+- Fixed WebSocket communication in Java client
+  Fixed PoPP header duplication in testdriver
+- Fixed status always returning REGISTERED_NO_VALID_TOKENS
+- Persist `zeta_route` cookie via SdkStorage for sticky session
+
+## Changes in 1.0.2 (from 1.0.1)
+
+- Hotfix: The C# client compilation error has been solved. Missing files have added.
 
 ## Changes in 1.0.1 (from 1.0.0)
 

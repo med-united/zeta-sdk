@@ -54,6 +54,7 @@ fun AccessTokenRequest.toParameters() = Parameters.build {
     append("client_assertion_type", clientAssertionType)
     append("client_assertion", clientAssertion)
     append("scope", scope)
+    append("audience", audience)
     if (!refreshToken.isNullOrBlank()) {
         append("refresh_token", refreshToken)
     }

@@ -33,6 +33,7 @@ import de.gematik.zeta.logging.ZetaLogLevel
 import de.gematik.zeta.logging.ZetaLogger
 import de.gematik.zeta.platform.Platform
 import de.gematik.zeta.platform.platform
+import de.gematik.zeta.sdk.ZetaSdk.clearRegistration
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
@@ -40,6 +41,8 @@ import de.gematik.zeta.sdk.authentication.smcb.CustomConnectorApi
 import de.gematik.zeta.sdk.authentication.smcb.CustomSmcbTokenProvider
 import de.gematik.zeta.sdk.authentication.smcb.SmcbTokenProvider
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
+import de.gematik.zeta.sdk.network.http.client.config.ProxyConfig
+import de.gematik.zeta.sdk.network.http.client.config.ProxyType
 import de.gematik.zeta.sdk.storage.SdkStorage
 import de.gematik.zeta.sdk.storage.StorageConfig
 import interop.ZETA_LOG_LEVEL_DEBUG
@@ -76,25 +79,69 @@ import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import platform.posix.free
+import kotlin.collections.emptyList
 import kotlin.collections.orEmpty
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 import kotlin.experimental.ExperimentalNativeApi
 
-var disableServerValidation: Boolean = false
+data class NativeHttpSecurityConfig(
+    val additionalCaPem: List<String> = emptyList(),
+    val additionalCaFile: String? = null,
+    val disableServerValidation: Boolean = false,
+    val sslVerbose: Boolean = false,
+    val proxyConfig: ProxyConfig? = null,
+)
+var globalHttpSecurityConfig = NativeHttpSecurityConfig()
 
 @CName(externName = "ZetaSdk_buildZetaClient")
 fun ZetaSdk_buildSdkClient(
     buildConfig: CPointer<ZetaSdk_BuildConfig>,
-    disableTlsValidation: Boolean = false,
 ): CPointer<ZetaSdk_Client> {
-    disableServerValidation = disableTlsValidation
-
     val cBuildConfig = buildConfig.pointed
     val cStorageConfig = cBuildConfig.storageConfig!!.pointed
     val cAuthConfig = cBuildConfig.authConfig!!.pointed
     val cSmbConfig = cAuthConfig.smbConfig?.pointed
     val cSmcbConfig = cAuthConfig.smcbConfig?.pointed
+    val cSecurityConfig = cBuildConfig.securityConfig?.pointed
+
+    val additionalCaPem = cSecurityConfig
+        ?.additionalCaPem
+        ?.let { ptr ->
+            (0 until cSecurityConfig.additionalCaPemCount)
+                .mapNotNull { index ->
+                    ptr[index]?.toKString()
+                }
+        }
+        ?: emptyList()
+
+    val additionalCaFile = cSecurityConfig
+        ?.additionalCaFile
+        ?.toKString()
+
+    val disableServerValidation = cSecurityConfig
+        ?.disableServerValidation
+        ?: false
+
+    val sslVerbose = cSecurityConfig
+        ?.sslVerbose
+        ?: false
+
+    globalHttpSecurityConfig = NativeHttpSecurityConfig(
+        additionalCaPem = additionalCaPem,
+        additionalCaFile = additionalCaFile,
+        disableServerValidation = disableServerValidation,
+        sslVerbose = sslVerbose,
+        proxyConfig = cBuildConfig.proxyConfig?.pointed?.let {
+            ProxyConfig(
+                type = if (it.type == 1) ProxyType.SOCKS else ProxyType.HTTP,
+                host = it.host?.toKString() ?: "",
+                port = it.port,
+                username = it.username?.toKString(),
+                password = it.password?.toKString()?.toCharArray(),
+            )
+        },
+    )
 
     val storageConfig = buildStorageConfig(cStorageConfig)
     setupLogger(cBuildConfig)
@@ -111,8 +158,25 @@ fun ZetaSdk_buildSdkClient(
             authConfig,
             platformProductId = getPlatformProduct(),
             ZetaHttpClientBuilder()
-                .disableServerValidation(disableServerValidation)
+                .disableServerValidation(globalHttpSecurityConfig.disableServerValidation)
+                .apply {
+                    globalHttpSecurityConfig.additionalCaPem.forEach { pem ->
+                        addCaPem(pem)
+                    }
+
+                    globalHttpSecurityConfig.additionalCaFile?.let { file ->
+                        addCaPemFile(file)
+                    }
+
+                    if (globalHttpSecurityConfig.sslVerbose) {
+                        logging(LogLevel.ALL)
+                    }
+
+                    globalHttpSecurityConfig.proxyConfig?.let { proxy(it) }
+                }
+                .contentNegotiation(true)
                 .logging(LogLevel.ALL),
+
         ),
     )
 
@@ -276,7 +340,15 @@ fun ZetaSdk_buildHttpClient(
     val zetaSdkClient = sdkClient.pointed.zetaSdkClient!!.asStableRef<ZetaSdkClient>().get()
     val zetaHttpClient = zetaSdkClient.httpClient {
         logging(LogLevel.ALL)
-        disableServerValidation(disableServerValidation)
+        disableServerValidation(globalHttpSecurityConfig.disableServerValidation)
+        globalHttpSecurityConfig.additionalCaPem.forEach { pem ->
+            addCaPem(pem)
+        }
+        globalHttpSecurityConfig.additionalCaFile?.let { file ->
+            addCaPemFile(file)
+        }
+        contentNegotiation(true)
+        globalHttpSecurityConfig.proxyConfig?.let { proxy(it) }
     }
     return nativeHeap.alloc<ZetaSdk_HttpClient>().let { httpClient ->
         httpClient.zetaHttpClient = StableRef.create(zetaHttpClient).asCPointer()
@@ -310,22 +382,86 @@ fun ZetaHttpResponse_destroy(
 }
 
 @CName(externName = "ZetaSdk_close")
-fun ZetaSdk_close(
-    sdkClient: CPointer<ZetaSdk_Client>,
-) {
+fun ZetaSdk_close(sdkClient: CPointer<ZetaSdk_Client>): Int {
     val zetaSdkClient = sdkClient.pointed.zetaSdkClient!!.asStableRef<ZetaSdkClient>().get()
-    runBlocking {
-        zetaSdkClient.close()
+    return runBlocking {
+        zetaSdkClient.close().fold(
+            onSuccess = { 0 },
+            onFailure = {
+                Log.e { "[SDK] close failed: ${it.message}" }
+                -1
+            },
+        )
     }
 }
 
 @CName(externName = "ZetaSdk_logout")
-fun ZetaSdk_logout(
-    sdkClient: CPointer<ZetaSdk_Client>,
-) {
+fun ZetaSdk_logout(sdkClient: CPointer<ZetaSdk_Client>): Int {
     val zetaSdkClient = sdkClient.pointed.zetaSdkClient!!.asStableRef<ZetaSdkClient>().get()
-    runBlocking {
-        zetaSdkClient.logout()
+    return runBlocking {
+        zetaSdkClient.logout().fold(
+            onSuccess = { 0 },
+            onFailure = {
+                Log.e { "[SDK] logout failed: ${it.message}" }
+                -1
+            },
+        )
+    }
+}
+
+@CName(externName = "ZetaSdk_clearRegistration")
+fun ZetaSdk_clearRegistration(sdkClient: CPointer<ZetaSdk_Client>): Int {
+    val zetaSdkClient = sdkClient.pointed.zetaSdkClient!!.asStableRef<ZetaSdkClient>().get()
+    return runBlocking {
+        zetaSdkClient.clearRegistration().fold(
+            onSuccess = { 0 },
+            onFailure = {
+                Log.e { "[SDK] clear registration failed: ${it.message}" }
+                -1
+            },
+        )
+    }
+}
+
+@CName(externName = "ZetaSdk_discover")
+fun ZetaSdk_discover(sdkClient: CPointer<ZetaSdk_Client>): Int {
+    val zetaSdkClient = sdkClient.pointed.zetaSdkClient!!.asStableRef<ZetaSdkClient>().get()
+    return runBlocking {
+        zetaSdkClient.discover().fold(
+            onSuccess = { 0 },
+            onFailure = {
+                Log.e { "[SDK] discover failed: ${it.message}" }
+                -1
+            },
+        )
+    }
+}
+
+@CName(externName = "ZetaSdk_register")
+fun ZetaSdk_register(sdkClient: CPointer<ZetaSdk_Client>): Int {
+    val zetaSdkClient = sdkClient.pointed.zetaSdkClient!!.asStableRef<ZetaSdkClient>().get()
+    return runBlocking {
+        zetaSdkClient.register().fold(
+            onSuccess = { 0 },
+            onFailure = {
+                Log.e { "[SDK] register failed: ${it.message}" }
+                -1
+            },
+        )
+    }
+}
+
+@CName(externName = "ZetaSdk_authenticate")
+fun ZetaSdk_authenticate(sdkClient: CPointer<ZetaSdk_Client>): Int {
+    val zetaSdkClient = sdkClient.pointed.zetaSdkClient!!.asStableRef<ZetaSdkClient>().get()
+    return runBlocking {
+        zetaSdkClient.authenticate().fold(
+            onSuccess = { 0 },
+            onFailure = {
+                Log.e { "[SDK] authenticate failed: ${it.message}" }
+                -1
+            },
+        )
     }
 }
 

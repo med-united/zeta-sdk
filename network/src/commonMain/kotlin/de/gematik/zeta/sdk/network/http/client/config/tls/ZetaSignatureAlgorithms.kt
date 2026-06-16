@@ -28,7 +28,6 @@ public object ZetaSignatureAlgorithms {
     public val ALLOWED: List<String> = listOf(
         "ecdsa_secp256r1_sha256",
         "ecdsa_secp384r1_sha384",
-        "ecdsa_secp521r1_sha512",
         "rsa_pkcs1_sha256", // Required for certificate chain validation
     )
 

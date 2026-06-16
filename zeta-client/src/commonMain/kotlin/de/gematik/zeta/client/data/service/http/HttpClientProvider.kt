@@ -38,6 +38,7 @@ import de.gematik.zeta.sdk.BuildConfig
 import de.gematik.zeta.sdk.SdkStatus
 import de.gematik.zeta.sdk.TpmConfig
 import de.gematik.zeta.sdk.ZetaSdk
+import de.gematik.zeta.sdk.ZetaSdk.clearRegistration
 import de.gematik.zeta.sdk.ZetaSdk.forget
 import de.gematik.zeta.sdk.ZetaSdkClient
 import de.gematik.zeta.sdk.attestation.model.AttestationConfig
@@ -57,6 +58,7 @@ public interface HttpClientProvider {
     public fun provideHttpClient(): ZetaHttpClient
     public fun setupEnvUrl(url: String)
     public suspend fun forget()
+    public suspend fun clearRegistration()
     public suspend fun logout()
     public suspend fun status(): SdkStatus
 }
@@ -76,6 +78,10 @@ public class HttpClientProviderImpl : HttpClientProvider {
 
     override suspend fun forget() {
         sdkClient.forget()
+    }
+
+    override suspend fun clearRegistration() {
+        sdkClient.clearRegistration()
     }
 
     override suspend fun logout() {
@@ -146,6 +152,7 @@ public class HttpClientProviderImpl : HttpClientProvider {
         return sdkClient.httpClient {
             logging(LogLevel.ALL)
             disableServerValidation(DISABLE_SERVER_VALIDATION)
+            contentNegotiation(true)
         }
     }
 

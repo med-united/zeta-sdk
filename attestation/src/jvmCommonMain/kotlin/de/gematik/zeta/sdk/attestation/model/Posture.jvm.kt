@@ -32,7 +32,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
 actual suspend fun buildPosture(
-    platformProductId: PlatformProductId,
+    platformProductId: PlatformProductId?,
     productId: String,
     productVersion: String,
     attChallenge: String,
@@ -54,7 +54,7 @@ actual suspend fun buildPosture(
 internal fun buildPostureInternal(
     platform: Platform,
     platformInfo: de.gematik.zeta.platform.PlatformInfo,
-    platformProductId: PlatformProductId,
+    platformProductId: PlatformProductId? = null,
     productId: String,
     productVersion: String,
     attChallenge: String,
@@ -62,27 +62,7 @@ internal fun buildPostureInternal(
 ): JsonElement {
     val json = Json {
         encodeDefaults = true
-    }
-
-    if (platform == Platform.APPLE) {
-        return json.encodeToJsonElement(
-            ApplePosture.serializer(),
-            ApplePosture(
-                productId = productId,
-                productVersion = productVersion,
-                platformProductId = platformProductId,
-                systemVersion = platformInfo.osVersion,
-                systemName = platformInfo.os,
-                deviceModel = "deviceModel",
-                keyId = "keyId",
-                fmt = "apple-appattest",
-                attStmt = AttStmt(emptyList(), ""),
-                authData = AuthData("", "", 1, "", ""),
-                signature = "signature",
-                assertionAuthenticatorData = AssertionAuthenticatorData("", 1),
-                clientDataJson = "clientDataJson",
-            ),
-        )
+        explicitNulls = false
     }
 
     return json.encodeToJsonElement(
@@ -111,7 +91,7 @@ internal fun mapPlatform(plat: de.gematik.zeta.platform.Platform): Platform {
 
 internal fun mapPostureType(plat: de.gematik.zeta.platform.Platform): PostureType {
     return when (plat) {
-        is de.gematik.zeta.platform.Platform.Jvm.Macos -> PostureType.APPLE
+        is de.gematik.zeta.platform.Platform.Jvm.Macos -> PostureType.SOFTWARE
         is de.gematik.zeta.platform.Platform.Jvm.Linux -> PostureType.SOFTWARE
         is de.gematik.zeta.platform.Platform.Jvm.Windows -> PostureType.SOFTWARE
         is de.gematik.zeta.platform.Platform.Android -> PostureType.ANDROID

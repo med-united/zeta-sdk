@@ -32,15 +32,14 @@ import kotlin.test.assertTrue
 class ZetaSignatureAlgorithmsTest {
 
     @Test
-    fun ALLOWED_containsEcdsaAlgorithms_sizeIsThree() {
+    fun ALLOWED_containsEcdsaAlgorithms() {
         // Arrange & Act
         val allowed = ZetaSignatureAlgorithms.ALLOWED
 
         // Assert
-        assertEquals(4, allowed.size)
+        assertEquals(3, allowed.size)
         assertTrue("ecdsa_secp256r1_sha256" in allowed)
         assertTrue("ecdsa_secp384r1_sha384" in allowed)
-        assertTrue("ecdsa_secp521r1_sha512" in allowed)
         assertTrue("rsa_pkcs1_sha256" in allowed) // required for the certificate chain validation
     }
 
@@ -50,10 +49,9 @@ class ZetaSignatureAlgorithmsTest {
         val allowed = ZetaSignatureAlgorithms.ALLOWED
 
         // Assert
-        assertEquals(4, allowed.size)
+        assertEquals(3, allowed.size)
         assertFalse("rsa_pss_rsae_sha256" in allowed)
         assertFalse("rsa_pss_rsae_sha384" in allowed)
-        assertFalse("rsa_pss_rsae_sha512" in allowed)
         assertTrue("rsa_pkcs1_sha256" in allowed) // required for the certificate chain validation
         ZetaSignatureAlgorithms.ALLOWED.forEach { assertTrue(it in allowed) }
     }
