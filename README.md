@@ -187,11 +187,11 @@ values in the "gradle.properties" and the "local.properties" file.
 
 Before building any client that depends on the SDK via Maven, publish it to the local Maven repository:
 ```bash
-RELEASE_VERSION=1.0.1-service-health ./gradlew publishJvmPublicationToMavenLocal
+RELEASE_VERSION=1.2.0-service-health ./gradlew publishJvmPublicationToMavenLocal
 ```
 
 ```bash
-RELEASE_VERSION=1.0.1-service-health ./gradlew publishKotlinMultiplatformPublicationToMavenLocal
+RELEASE_VERSION=1.2.0-service-health ./gradlew publishKotlinMultiplatformPublicationToMavenLocal
 ```
 
 #### gradle.properties
