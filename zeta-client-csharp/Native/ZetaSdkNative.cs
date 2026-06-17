@@ -31,7 +31,7 @@ internal static partial class ZetaSdkNative
     internal const string Lib = "zeta_sdk";
 
     [LibraryImport(Lib)]
-    internal static partial IntPtr ZetaSdk_buildZetaClient(IntPtr buildConfig, byte disableTlsValidation);
+    internal static partial IntPtr ZetaSdk_buildZetaClient(IntPtr buildConfig);
 
     [LibraryImport(Lib)]
     internal static partial IntPtr ZetaSdk_buildHttpClient(IntPtr sdkClient);
@@ -94,11 +94,11 @@ internal static partial class ZetaSdkNative
     [LibraryImport(Lib)]
     internal static partial void ZetaHttpResponse_destroy(IntPtr respPtr);
 
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int ZetaSdk_status(IntPtr client);
+    [LibraryImport(Lib)]
+    internal static partial int ZetaSdk_status(IntPtr client);
 
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    public static extern void ZetaSdk_logout(IntPtr client);
+    [LibraryImport(Lib)]
+    internal static partial int ZetaSdk_logout(IntPtr client);
 
     [LibraryImport(Lib)]
     internal static partial void ZetaSdk_Client_ws(
@@ -117,6 +117,21 @@ internal static partial class ZetaSdkNative
 
     [LibraryImport(Lib)]
     internal static partial void ZetaSdk_WSSession_sendText(IntPtr wsSession, IntPtr text, int textLen);
+
+    [LibraryImport(Lib)]
+    internal static partial int ZetaSdk_discover(IntPtr client);
+
+    [LibraryImport(Lib)]
+    internal static partial int ZetaSdk_register(IntPtr client);
+
+    [LibraryImport(Lib)]
+    internal static partial int ZetaSdk_authenticate(IntPtr client);
+
+    [LibraryImport(Lib)]
+    internal static partial int ZetaSdk_clearRegistration(IntPtr client);
+
+    [LibraryImport(Lib)]
+    internal static partial int ZetaSdk_close(IntPtr client);
 
     [LibraryImport(Lib)]
     internal static partial void ZetaSdk_WSSession_close(IntPtr wsSession);

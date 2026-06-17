@@ -27,74 +27,122 @@ package de.gematik.zeta.sdk.network.http.client
 import de.gematik.zeta.logging.Log
 import de.gematik.zeta.sdk.crypto.OcspHandler
 import de.gematik.zeta.sdk.crypto.OcspHandlerImpl
-import de.gematik.zeta.sdk.crypto.OcspRequestData
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsBytes
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
+import kotlin.time.Clock
 
-public class CertificateRevokedException(message: String, cause: Throwable? = null) :
-    Exception(message, cause)
-
-internal class RevocationChecker(
-    private val ocspHandler: OcspHandler = OcspHandlerImpl(),
-    private val httpClient: HttpClient = HttpClient(),
+public suspend fun validateRevocation(
+    stapledOcspResponse: ByteArray?,
+    certDer: ByteArray,
+    issuerDer: ByteArray,
+    ocspValidator: OcspHandler = OcspHandlerImpl(),
+    httpClient: HttpClient = HttpClient(),
+    maxOcspAgeSeconds: Long = 24 * 3600,
+    allowSkipForTestCertificates: Boolean = false,
 ) {
-    suspend fun checkRevocation(certDer: ByteArray, issuerDer: ByteArray) {
-        val ocspSuccess = try {
-            checkOCSP(certDer, issuerDer)
-            Log.i { "OCSP validation successful" }
-            true
-        } catch (e: Exception) {
-            Log.w { "OCSP check failed: ${e.message}" }
-            false
+    if (stapledOcspResponse != null) {
+        Log.i { "Using OCSP stapling response (${stapledOcspResponse.size} bytes)" }
+        validateOcspResponse(stapledOcspResponse, certDer, issuerDer, ocspValidator, maxOcspAgeSeconds)
+        return
+    }
+
+    Log.w { "No OCSP stapling - attempting fallback to direct OCSP or CRL" }
+
+    val ocspAttempt = tryDirectOcsp(certDer, issuerDer, httpClient, ocspValidator, maxOcspAgeSeconds)
+    if (ocspAttempt.success) {
+        Log.i { "Successfully validated via direct OCSP" }
+        return
+    }
+
+    Log.w { "Direct OCSP failed: ${ocspAttempt.error}" }
+
+    val crlAttempt = tryDirectCrl(certDer, issuerDer, httpClient, ocspValidator)
+    if (crlAttempt.success) {
+        Log.i { "Successfully validated via CRL" }
+        return
+    }
+
+    Log.e { "CRL check failed: ${crlAttempt.error}" }
+
+    if (allowSkipForTestCertificates) {
+        Log.w { "Skipping revocation check for test certificate" }
+        return
+    }
+
+    error(
+        "Certificate revocation check failed: " +
+            "No OCSP stapling, direct OCSP failed (${ocspAttempt.error}), " +
+            "CRL check failed (${crlAttempt.error})",
+    )
+}
+
+public data class ValidationAttempt(
+    val success: Boolean,
+    val error: String? = null,
+)
+
+public suspend fun tryDirectOcsp(
+    certDer: ByteArray,
+    issuerDer: ByteArray,
+    httpClient: HttpClient,
+    ocspValidator: OcspHandler,
+    maxOcspAgeSeconds: Long,
+): ValidationAttempt {
+    return try {
+        val ocspRequestData = ocspValidator.prepareOcspRequest(certDer, issuerDer)
+        val ocspResponse = fetchOcspDirect(ocspRequestData.url, ocspRequestData.requestDer, httpClient)
+        validateOcspResponse(ocspResponse, certDer, issuerDer, ocspValidator, maxOcspAgeSeconds)
+        ValidationAttempt(success = true)
+    } catch (e: Exception) {
+        ValidationAttempt(success = false, error = e.message ?: "Unknown error")
+    }
+}
+
+public suspend fun tryDirectCrl(
+    certDer: ByteArray,
+    issuerDer: ByteArray,
+    httpClient: HttpClient,
+    ocspValidator: OcspHandler,
+): ValidationAttempt {
+    return try {
+        val crlUrl = ocspValidator.extractCrlUrl(certDer)
+            ?: return ValidationAttempt(success = false, error = "No CRL URL in certificate")
+
+        Log.i { "Fetching CRL from: $crlUrl" }
+        val crlDer = httpClient.get(crlUrl).bodyAsBytes()
+        Log.i { "CRL fetched: ${crlDer.size} bytes" }
+
+        ocspValidator.validateCrl(crlDer, certDer, issuerDer)
+        ValidationAttempt(success = true)
+    } catch (e: Exception) {
+        ValidationAttempt(success = false, error = e.message ?: "Unknown error")
+    }
+}
+
+private fun validateOcspResponse(
+    ocspResponse: ByteArray,
+    certDer: ByteArray,
+    issuerDer: ByteArray,
+    ocspValidator: OcspHandler,
+    maxOcspAgeSeconds: Long,
+) {
+    val nowSeconds = Clock.System.now().epochSeconds
+    val nextUpdate = ocspValidator.getNextUpdateEpochSeconds(ocspResponse, certDer, issuerDer)
+
+    if (nextUpdate != null) {
+        require(nowSeconds < nextUpdate) {
+            "OCSP response expired: nextUpdate was $nextUpdate, now is $nowSeconds"
         }
-
-        if (!ocspSuccess) {
-            try {
-                checkCRL(certDer, issuerDer)
-                Log.i { "CRL validation successful" }
-            } catch (e: Exception) {
-                Log.w { "CRL check failed: ${e.message}" }
-
-                throw CertificateRevokedException(
-                    "Revocation check failed: OCSP and CRL both unavailable or invalid", e,
-                )
-            }
+        Log.i { "OCSP response valid until: $nextUpdate" }
+    } else {
+        val producedAt = ocspValidator.getProducedAtEpochSeconds(ocspResponse)
+        val ageSeconds = nowSeconds - producedAt
+        Log.i { "OCSP response age: ${ageSeconds}s (no nextUpdate, using ${maxOcspAgeSeconds / 3600}h max)" }
+        require(ageSeconds <= maxOcspAgeSeconds) {
+            "OCSP response too old: ${ageSeconds / 3600}h (max ${maxOcspAgeSeconds / 3600}h)"
         }
     }
 
-    private suspend fun checkOCSP(certDer: ByteArray, issuerDer: ByteArray) {
-        val ocspRequestData = ocspHandler.prepareOcspRequest(certDer, issuerDer)
-        val ocspResponseDer = sendOcspRequest(ocspRequestData)
-        ocspHandler.validate(ocspResponseDer, certDer, issuerDer)
-    }
-
-    private suspend fun sendOcspRequest(requestData: OcspRequestData): ByteArray {
-        val response = httpClient.post(requestData.url) {
-            contentType(ContentType.parse("application/ocsp-request"))
-            setBody(requestData.requestDer)
-        }
-        return response.bodyAsBytes()
-    }
-
-    private suspend fun checkCRL(certDer: ByteArray, issuerDer: ByteArray) {
-        val crlUrl = ocspHandler.extractCrlUrl(certDer)
-            ?: throw CertificateRevokedException("No CRL distribution point found")
-
-        val crlDer = downloadCRL(crlUrl)
-        ocspHandler.validateCrl(crlDer, certDer, issuerDer)
-    }
-
-    private suspend fun downloadCRL(crlUrl: String): ByteArray {
-        val response = httpClient.get(crlUrl)
-        return response.bodyAsBytes()
-    }
-
-    fun close() {
-        httpClient.close()
-    }
+    ocspValidator.validate(ocspResponse, certDer, issuerDer)
 }

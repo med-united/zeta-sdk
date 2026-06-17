@@ -24,16 +24,22 @@
 
 package de.gematik.zeta.sdk
 
+import de.gematik.zeta.sdk.ZetaSdk.clearRegistration
 import de.gematik.zeta.sdk.ZetaSdk.forget
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.authentication.AuthenticationStorageImpl
 import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
+import de.gematik.zeta.sdk.network.http.client.CompositeCookieStorage
+import de.gematik.zeta.sdk.network.http.client.SdkCookieStorage
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
+import de.gematik.zeta.sdk.network.http.client.hostOf
 import de.gematik.zeta.sdk.storage.InMemoryStorage
 import de.gematik.zeta.sdk.storage.SdkStorage
 import de.gematik.zeta.sdk.storage.StorageConfig
 import io.ktor.client.plugins.logging.LogLevel
+import io.ktor.http.Cookie
+import io.ktor.http.Url
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -46,9 +52,73 @@ import kotlin.test.assertTrue
 import kotlin.time.Clock
 
 class ZetaSdkTest {
-
     private val requiredRoleOid = "1.2.276.0.76.4.261"
     private val aesTestKey: String = "7aae7xXr8rnzVqjpYbosS0CFMrlprkD7jbVotm0fd"
+    private val resource = "https://example.com/pep/service/"
+    private val storage = InMemoryStorage()
+
+    private fun buildClient(): ZetaSdkClient = ZetaSdk.build(
+        resource,
+        createTestBuildConfig(storageConfig = StorageConfig.Custom(storage)),
+    )
+
+    private suspend fun storeCookie() {
+        val sdkCookieStorage = SdkCookieStorage(storage, hostOf(resource))
+        sdkCookieStorage.addCookie(
+            Url(resource),
+            Cookie(name = CompositeCookieStorage.ZETA_ROUTE_COOKIE, value = "test_route_value"),
+        )
+    }
+
+    private suspend fun readCookie(): String? {
+        val sdkCookieStorage = SdkCookieStorage(storage, hostOf(resource))
+        return sdkCookieStorage.get(Url(resource)).firstOrNull()?.value
+    }
+
+    @Test
+    fun logout_clearsCookie() = runTest {
+        val client = buildClient()
+        storeCookie()
+
+        assertNotNull(readCookie())
+
+        client.logout()
+
+        assertNull(readCookie())
+    }
+
+    @Test
+    fun forget_clearsCookie() = runTest {
+        val client = buildClient()
+        storeCookie()
+
+        assertNotNull(readCookie())
+
+        with(ZetaSdk) { client.forget() }
+
+        assertNull(readCookie())
+    }
+
+    @Test
+    fun clearRegistration_clearsCookie() = runTest {
+        val client = buildClient()
+        storeCookie()
+        assertNotNull(readCookie())
+        with(ZetaSdk) { client.clearRegistration() }
+
+        assertNull(readCookie())
+    }
+
+    @Test
+    fun logout_doesNotAffectOtherStorageKeys() = runTest {
+        val client = buildClient()
+        storeCookie()
+        storage.put("other_key", "other_value")
+        client.logout()
+
+        assertNull(readCookie())
+        assertEquals("other_value", storage.get("other_key"))
+    }
 
     @Test
     fun build_createsClient_withMinimalConfig() {
@@ -115,6 +185,19 @@ class ZetaSdkTest {
 
         // Act
         val result = client.forget()
+
+        // Assert
+        assertTrue(result.isSuccess)
+    }
+
+    @Test
+    fun clearRegistration_returnsSuccess_whenNoErrors() = runTest {
+        // Arrange
+        val config = createTestBuildConfig()
+        val client = ZetaSdk.build("https://api.example.com", config)
+
+        // Act
+        val result = client.clearRegistration()
 
         // Assert
         assertTrue(result.isSuccess)

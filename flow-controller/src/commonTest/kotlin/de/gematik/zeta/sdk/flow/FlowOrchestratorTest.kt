@@ -193,6 +193,7 @@ class FlowOrchestratorTest {
 
     private fun createClient(mockEngine: MockEngine): ZetaHttpClient =
         ZetaHttpClientBuilder()
+            .contentNegotiation(true)
             .build(mockEngine)
 
     private fun createHandler(mock: MockEngine, maxRetries: Int = 3): ClientRegistrationHandler {

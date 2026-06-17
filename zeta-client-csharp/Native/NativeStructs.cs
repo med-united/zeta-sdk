@@ -117,6 +117,8 @@ internal struct NativeBuildConfig
     public IntPtr tpmConfig;
     public IntPtr authConfig;
     public IntPtr logVTable;
+    public IntPtr proxyConfig;
+    public IntPtr securityConfig;
 }
 
 [StructLayout(LayoutKind.Explicit)]
@@ -129,3 +131,23 @@ internal struct NativeWsMessage
 }
 
 internal enum NativeWsMessageType { Text = 0, Binary = 1, Close = 2 }
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeProxyConfig
+{
+    internal IntPtr host;
+    internal int    port;
+    internal IntPtr username;
+    internal IntPtr password;
+    internal int    type;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeSecurityConfig
+{
+    public IntPtr additionalCaPem;
+    public int additionalCaPemCount;
+    public IntPtr additionalCaFile;
+    [MarshalAs(UnmanagedType.I1)] public bool disableServerValidation;
+    [MarshalAs(UnmanagedType.I1)] public bool sslVerbose;
+}

@@ -80,3 +80,116 @@ static void ktor_install_curve_validator(SSL_CTX *ctx, const char *allowed_curve
 static void ktor_install_info_callback(SSL_CTX *ctx) {
     SSL_CTX_set_info_callback(ctx, ktor_ssl_info_callback);
 }
+
+/* Zeta revocation callback (cert+issuer+staple ) */
+typedef int (*ZetaRevocationFn)(
+    const unsigned char *cert_der,   int cert_len,
+    const unsigned char *issuer_der, int issuer_len,
+    const unsigned char *staple,     int staple_len
+);
+
+static ZetaRevocationFn zeta_revocation_fn = NULL;
+
+static void zeta_register_revocation_fn(ZetaRevocationFn fn) {
+    zeta_revocation_fn = fn;
+}
+
+typedef struct {
+    unsigned char *cert_der;
+    int            cert_len;
+    unsigned char *issuer_der;
+    int            issuer_len;
+} ZetaDerData;
+
+static int zeta_der_data_idx = -1;
+
+static void zeta_free_der_data(void *parent, void *ptr, CRYPTO_EX_DATA *ad,
+                                int idx, long argl, void *argp) {
+    ZetaDerData *data = (ZetaDerData *)ptr;
+    if (data) {
+        OPENSSL_free(data->cert_der);
+        OPENSSL_free(data->issuer_der);
+        OPENSSL_free(data);
+    }
+}
+
+static int zeta_get_der_data_idx(void) {
+    if (zeta_der_data_idx == -1) {
+        zeta_der_data_idx = SSL_get_ex_new_index(0, NULL, NULL, NULL, zeta_free_der_data);
+    }
+    return zeta_der_data_idx;
+}
+
+/* Verify callback: only stores DERs */
+static int zeta_c_verify_callback(int preverify_ok, X509_STORE_CTX *ctx) {
+    if (!preverify_ok) return 0;
+    if (X509_STORE_CTX_get_error_depth(ctx) != 0) return 1;
+
+    X509 *cert = X509_STORE_CTX_get_current_cert(ctx);
+    if (!cert) return 0;
+
+    unsigned char *cert_der = NULL;
+    int cert_len = i2d_X509(cert, &cert_der);
+    if (cert_len <= 0) return 0;
+
+    // Get issuer: from chain (TLS 1.2) or trust store (TLS 1.3)
+    STACK_OF(X509) *chain = X509_STORE_CTX_get0_untrusted(ctx);
+    X509 *issuer = (chain && sk_X509_num(chain) >= 2)
+        ? sk_X509_value(chain, 1)
+        : NULL;
+    int issuer_from_store = (issuer == NULL);
+    if (issuer_from_store && X509_STORE_CTX_get1_issuer(&issuer, ctx, cert) <= 0)
+        issuer = NULL;
+
+    unsigned char *issuer_der = NULL;
+    int issuer_len = issuer ? i2d_X509(issuer, &issuer_der) : 0;
+    if (issuer_from_store) X509_free(issuer);
+
+    if (issuer_len <= 0) {
+        OPENSSL_free(cert_der);
+        return 0;
+    }
+
+    SSL *ssl = (SSL*)X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
+    if (ssl) {
+        ZetaDerData *data = (ZetaDerData*)OPENSSL_malloc(sizeof(ZetaDerData));
+        if (data) {
+            data->cert_der   = cert_der;   data->cert_len   = cert_len;
+            data->issuer_der = issuer_der; data->issuer_len = issuer_len;
+            SSL_set_ex_data(ssl, zeta_get_der_data_idx(), data);
+            cert_der = issuer_der = NULL;
+        }
+    }
+
+    OPENSSL_free(cert_der);
+    OPENSSL_free(issuer_der);
+    return 1;
+}
+
+/* status callback: receives staple (or null), runs full revocation check */
+static int zeta_c_status_callback(SSL *ssl, void *arg) {
+    if (zeta_revocation_fn == NULL) {
+        return 1;
+    }
+
+    ZetaDerData *data = (ZetaDerData*)SSL_get_ex_data(ssl, zeta_get_der_data_idx());
+    if (!data) {
+        return 0;
+    }
+
+    const unsigned char *staple = NULL;
+    int staple_len = SSL_get_tlsext_status_ocsp_resp(ssl, &staple);
+
+    return zeta_revocation_fn(
+        data->cert_der,   data->cert_len,
+        data->issuer_der, data->issuer_len,
+        (staple_len > 0) ? staple : NULL,
+        (staple_len > 0) ? staple_len : 0
+    );
+}
+
+/* Install both callbacks on SSL_CTX */
+static void zeta_install_callbacks(SSL_CTX *ctx) {
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, zeta_c_verify_callback);
+    SSL_CTX_set_tlsext_status_cb(ctx, zeta_c_status_callback);
+}

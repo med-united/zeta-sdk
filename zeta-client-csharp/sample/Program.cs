@@ -59,11 +59,32 @@ var config = new ZetaClientConfig
         //CustomSmcb = new MyCustomConnector(),
         RequiredRoleOid = Env("REQUIRED_ROLE_OID")
      },
+     /*Proxy = new ZetaProxyConfig
+     {
+         Host     = "127.0.0.1",
+         Port     = 8080,
+         Username = "user",
+         Password = "password",
+         Type     = ZetaProxyType.Http
+     },*/
      Logger = (level, tag, message) =>
      {
          Console.WriteLine($"[{level}] [{tag ?? "Zeta"}] {message}");
      },
      LogLevel = ZetaLogLevel.Info,
+     Security = new SecurityConfig
+      {
+          /*AdditionalCaPem = [
+                    """
+            -----BEGIN CERTIFICATE-----
+            ...
+            -----END CERTIFICATE-----
+            """
+                ],*/
+          // AdditionalCaFile = "/path/to/ca.crt",
+          DisableServerValidation = false,
+          SslVerbose = false,
+      }
 };
 
 bool disableTls = string.Equals(
@@ -74,7 +95,7 @@ string poppToken    = Env("POPP_TOKEN");
 string wsBaseUrl    = Env("WS_BASE_URL");
 string wsContextPath= Env("WS_SERVER_CONTEXT_PATH");
 
-using var client = ZetaClient.Build(config, disableTls);
+using var client = ZetaClient.Build(config);
 
 // Http sample
 Console.WriteLine("HTTP sample");

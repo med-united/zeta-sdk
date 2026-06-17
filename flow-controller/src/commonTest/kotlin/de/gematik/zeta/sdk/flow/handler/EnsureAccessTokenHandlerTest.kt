@@ -40,8 +40,6 @@ import de.gematik.zeta.sdk.clientregistration.ClientRegistrationStorage
 import de.gematik.zeta.sdk.clientregistration.model.ClientRegistrationRequest
 import de.gematik.zeta.sdk.clientregistration.model.ClientRegistrationResponse
 import de.gematik.zeta.sdk.configuration.ConfigurationStorage
-import de.gematik.zeta.sdk.configuration.models.ApiVersion
-import de.gematik.zeta.sdk.configuration.models.ApiVersionStatus
 import de.gematik.zeta.sdk.configuration.models.AuthorizationServerMetadata
 import de.gematik.zeta.sdk.configuration.models.ProtectedResourceMetadata
 import de.gematik.zeta.sdk.configuration.models.ZetaAslUse
@@ -49,6 +47,7 @@ import de.gematik.zeta.sdk.flow.CapabilityResult
 import de.gematik.zeta.sdk.flow.FlowContext
 import de.gematik.zeta.sdk.flow.FlowContextImpl
 import de.gematik.zeta.sdk.flow.FlowNeed
+import de.gematik.zeta.sdk.flow.getDummyProtectedResourceObject
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpResponse
 import de.gematik.zeta.sdk.storage.InMemoryStorage
 import de.gematik.zeta.sdk.storage.SdkStorage
@@ -74,20 +73,6 @@ import kotlin.uuid.Uuid
  * Unit tests for [EnsureAccessTokenHandler].
  */
 class EnsureAccessTokenHandlerTest {
-    @Test
-    fun audienceFromIssuer_returnsAudienceWithCorrectPath() {
-        val expected = "https://example.com/auth/"
-        val issuerWithPath = "https://example.com/auth/realms/zeta-guard/"
-        val issuerWithAuth = "https://example.com/auth/"
-        val issuerNoAuth = "https://example.com/no-auth/"
-        val issuerNoPath = "https://example.com/"
-
-        assertEquals(expected, audienceFromIssuer(issuerWithPath))
-        assertEquals(expected, audienceFromIssuer(issuerWithAuth))
-        assertEquals(expected, audienceFromIssuer(issuerNoAuth))
-        assertEquals(expected, audienceFromIssuer(issuerNoPath))
-    }
-
     private val handler = EnsureAccessTokenHandler(
         tokenProvider = FakeAccessTokenProvider(),
         tpmProvider = FakeTpmProvider(false),
@@ -118,21 +103,6 @@ class EnsureAccessTokenHandlerTest {
     @Test
     fun canHandle_returnsFalse_forAsl() {
         assertFalse(handler.canHandle(FlowNeed.Asl))
-    }
-
-    @Test
-    fun audienceFromIssuer_preservesPort_customPort() {
-        assertEquals("https://auth.example.com:8443/auth/", audienceFromIssuer("https://auth.example.com:8443/some/path"))
-    }
-
-    @Test
-    fun audienceFromIssuer_usesHttps_httpsIssuer() {
-        assertTrue(audienceFromIssuer("https://issuer.example.com/some/path").startsWith("https://"))
-    }
-
-    @Test
-    fun audienceFromIssuer_alwaysEndsWithAuthSlash() {
-        assertTrue(audienceFromIssuer("https://issuer.example.com/some/path").endsWith("/auth/"))
     }
 
     @Test
@@ -469,7 +439,7 @@ private class FakeForwardingClient : de.gematik.zeta.sdk.flow.ForwardingClient {
 
 class FakeConfigurationStorage : ConfigurationStorage {
     override suspend fun getProtectedResource(resourceUrl: String): ProtectedResourceMetadata =
-        error("not in scope")
+        getDummyProtectedResourceObject(resourceUrl)
     override suspend fun saveProtectedResource(protectedRes: String): ProtectedResourceMetadata =
         error("not in scope")
     override suspend fun getAuthServers(): List<AuthorizationServerMetadata> =
@@ -491,14 +461,8 @@ class FakeConfigurationStorage : ConfigurationStorage {
             serviceDocumentation = "",
             uiLocalesSupported = listOf(""),
             codeChallengeMethodsSupported = listOf(""),
-            apiVersionsSupported = listOf(
-                ApiVersion(
-                    majorVersion = 1,
-                    version = "",
-                    status = ApiVersionStatus.STABLE,
-                    documentationUri = "",
-                ),
-            ),
+            registrationEndpoint = "",
+
         )
     override suspend fun linkResourceToAuthorizationServer(resource: String, authServerMetadata: AuthorizationServerMetadata) =
         error("not in scope")

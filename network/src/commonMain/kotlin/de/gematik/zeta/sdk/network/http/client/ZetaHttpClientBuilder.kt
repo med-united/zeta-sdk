@@ -24,6 +24,7 @@
 
 package de.gematik.zeta.sdk.network.http.client
 
+import de.gematik.zeta.sdk.network.http.client.config.ClientConfig
 import de.gematik.zeta.sdk.network.http.client.config.MonitoringConfig
 import de.gematik.zeta.sdk.network.http.client.config.NetworkConfig
 import de.gematik.zeta.sdk.network.http.client.config.ProxyConfig
@@ -31,6 +32,8 @@ import de.gematik.zeta.sdk.network.http.client.config.SecurityConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
 import io.ktor.client.engine.HttpClientEngine
+import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
+import io.ktor.client.plugins.cookies.CookiesStorage
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.http.HttpStatusCode
@@ -63,10 +66,14 @@ import io.ktor.http.HttpStatusCode
  *
  * Thread-safety: the builder is mutable and not thread-safe. Build once and share the resulting [HttpClient].
  */
-public open class ZetaHttpClientBuilder(private val baseUrl: String = "") {
+public open class ZetaHttpClientBuilder(
+    private val baseUrl: String = "",
+    private val cookieStorage: CookiesStorage = AcceptAllCookiesStorage(),
+) {
     private var network: NetworkConfig = NetworkConfig()
     private var security: SecurityConfig = SecurityConfig()
     private var monitoring: MonitoringConfig = MonitoringConfig()
+    private var contentNegotiationEnabled: Boolean = false
 
     /**
      * Configure connection and/or overall request timeouts (milliseconds).
@@ -171,22 +178,28 @@ public open class ZetaHttpClientBuilder(private val baseUrl: String = "") {
     }
 
     /**
+     * Controls whether the [ContentNegotiation] plugin is installed on the HTTP client.
+     *
+     * When `true`, the client appends `Accept: application/json` to every request
+     * and supports automatic response body deserialization via `body<T>()`.
+     *
+     * Set to `false` (default) when using the client as a raw proxy to avoid polluting forwarded headers.
+     *
+     * @return This builder for chaining.
+     */
+    public fun contentNegotiation(enabled: Boolean): ZetaHttpClientBuilder = apply {
+        contentNegotiationEnabled = enabled
+    }
+
+    /**
      * Build a configured [HttpClient] using the current builder state.
      *
      * Delegates to the internal `zetaHttpClient { ... }` factory to construct and wire the client.
      *
      * @return A ready-to-use [HttpClient] instance.
      */
-    public fun build(): ZetaHttpClient {
-        return zetaHttpClient(
-            configure = {
-                this.baseUrlOverride = baseUrl
-                this.network = this@ZetaHttpClientBuilder.network
-                this.security = this@ZetaHttpClientBuilder.security
-                this.monitoring = this@ZetaHttpClientBuilder.monitoring
-            },
-        )
-    }
+    public fun build(): ZetaHttpClient =
+        zetaHttpClient(configure = baseConfig())
 
     /**
      * Build a configured [HttpClient] using the current builder state.
@@ -195,54 +208,55 @@ public open class ZetaHttpClientBuilder(private val baseUrl: String = "") {
      * @param addExtras Lambda to add extra custom configuration.
      * @return A ready-to-use [HttpClient] instance.
      */
-    public fun build(addExtras: (HttpClientConfig<*>.() -> Unit)? = null): ZetaHttpClient {
-        return zetaHttpClient(
-            configure = {
-                this.baseUrlOverride = baseUrl
-                this.network = this@ZetaHttpClientBuilder.network
-                this.security = this@ZetaHttpClientBuilder.security
-                this.monitoring = this@ZetaHttpClientBuilder.monitoring
-            },
-            addExtras = addExtras,
-        )
-    }
+    public fun build(addExtras: (HttpClientConfig<*>.() -> Unit)? = null): ZetaHttpClient =
+        zetaHttpClient(configure = baseConfig(), addExtras = addExtras)
 
     /**
-     * Build a configured [HttpClient] using the current builder state, but with a different baseUrl
-     * Needed for the internal calls to the PDP endpoints
+     * Build a configured [HttpClient] using the current builder state, but with a different baseUrl.
+     * Needed for the internal calls to the PDP endpoints.
      *
      * Delegates to the internal `zetaHttpClient { ... }` factory to construct and wire the client.
+     * @param newUrl The base URL override for this client instance.
      * @return A ready-to-use [HttpClient] instance.
      */
-    public open fun build(newUrl: String): ZetaHttpClient {
-        return zetaHttpClient(
-            configure = {
-                this.baseUrlOverride = newUrl
-                this.network = this@ZetaHttpClientBuilder.network
-                this.security = this@ZetaHttpClientBuilder.security
-                this.monitoring = this@ZetaHttpClientBuilder.monitoring
-            },
-        )
-    }
+    public open fun build(newUrl: String): ZetaHttpClient =
+        zetaHttpClient(configure = baseConfig(newUrl))
 
     /**
-     * Build a configured [HttpClient] using the current builder state.
+     * Build a configured [HttpClient] using the current builder state with an optional engine override.
      *
      * Delegates to the internal `zetaHttpClient { ... }` factory to construct and wire the client.
-     *
+     * @param engine Optional [HttpClientEngine] to use instead of the platform default.
      * @return A ready-to-use [HttpClient] instance.
      */
-    public fun build(engine: HttpClientEngine? = null): ZetaHttpClient {
-        return zetaHttpClient(
+    public fun build(engine: HttpClientEngine? = null): ZetaHttpClient =
+        zetaHttpClient(
             configure = {
-                this.baseUrlOverride = baseUrl
-                this.network = this@ZetaHttpClientBuilder.network
-                this.security = this@ZetaHttpClientBuilder.security
-                this.monitoring = this@ZetaHttpClientBuilder.monitoring
+                baseConfig()(this)
                 if (engine != null) this.engine(engine)
             },
         )
+
+    private fun baseConfig(urlOverride: String = baseUrl): ClientConfig.() -> Unit = {
+        this.baseUrlOverride = urlOverride
+        this.network = this@ZetaHttpClientBuilder.network
+        this.security = this@ZetaHttpClientBuilder.security
+        this.monitoring = this@ZetaHttpClientBuilder.monitoring
+        this.contentNegotiation = this@ZetaHttpClientBuilder.contentNegotiationEnabled
+        this.cookieStorage = this@ZetaHttpClientBuilder.cookieStorage
     }
+
+    public fun copy(
+        baseUrl: String = this.baseUrl,
+        cookieStorage: CookiesStorage = this.cookieStorage,
+    ): ZetaHttpClientBuilder =
+        ZetaHttpClientBuilder(baseUrl = baseUrl, cookieStorage = cookieStorage)
+            .also { copy ->
+                copy.network = this.network
+                copy.security = this.security
+                copy.monitoring = this.monitoring
+                copy.contentNegotiationEnabled = this.contentNegotiationEnabled
+            }
 
     public val isServerValidationDisabled: Boolean
         get() = security.disableServerValidation

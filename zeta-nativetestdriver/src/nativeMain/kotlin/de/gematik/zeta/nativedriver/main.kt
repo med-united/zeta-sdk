@@ -35,8 +35,10 @@ import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.authentication.AuthConfig
 import de.gematik.zeta.sdk.authentication.smb.SmbTokenProvider
 import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
+import de.gematik.zeta.sdk.network.http.client.ZetaHttpClientBuilder
 import de.gematik.zeta.sdk.storage.InMemoryStorage
 import de.gematik.zeta.sdk.storage.StorageConfig
+import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
@@ -63,8 +65,16 @@ public fun main() {
             ?.toKString(),
     ) { "FACHDIENST_URL is required" }
 
-    var sdk: ZetaSdkClient = buildSdk(fachdienstUrl)
-    var httpClient: ZetaHttpClient = sdk.httpClient {}
+    val disableTlsVerification = platform.posix.getenv("DISABLE_SERVER_VALIDATION")
+        ?.toKString()
+        ?.toBooleanStrictOrNull()
+        ?: false
+
+    var sdk: ZetaSdkClient = buildSdk(fachdienstUrl, disableTlsVerification)
+    var httpClient: ZetaHttpClient = sdk.httpClient {
+        logging(LogLevel.ALL)
+        disableServerValidation(disableTlsVerification)
+    }
 
     embeddedServer(CIO, port = 8091) {
         install(ContentNegotiation) {
@@ -82,10 +92,11 @@ public fun main() {
 
                 post("/configure") {
                     val config = call.receive<ConfigureRequest>()
-                    sdk = buildSdk(config.resource)
+                    sdk = buildSdk(config.resource, config.disableTlsVerification, config.caCertificatePem)
 
                     httpClient = sdk.httpClient {
                         addCaPem(config.caCertificatePem)
+                        logging(LogLevel.ALL)
                         disableServerValidation(config.disableTlsVerification)
                     }
 
@@ -129,7 +140,7 @@ private fun getPlatformProduct(): PlatformProductId {
     }
 }
 
-private fun buildSdk(fachdienstUrl: String): ZetaSdkClient {
+private fun buildSdk(fachdienstUrl: String, disableTlsVerification: Boolean, caPem: String = ""): ZetaSdkClient {
     val keystoreFile = requireNotNull(
         platform.posix.getenv("SMB_KEYSTORE_FILE")
             ?.toKString(),
@@ -162,6 +173,10 @@ private fun buildSdk(fachdienstUrl: String): ZetaSdkClient {
                 requiredOid,
             ),
             platformProductId = getPlatformProduct(),
+            ZetaHttpClientBuilder()
+                .logging(LogLevel.ALL)
+                .addCaPem(caPem)
+                .disableServerValidation(disableTlsVerification),
         ),
     )
 }

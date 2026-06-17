@@ -47,14 +47,14 @@ public sealed class ZetaClient : IDisposable
         _customSmcbHandle = customSmcbHandle;
     }
 
-    public static ZetaClient Build(ZetaClientConfig config, bool disableTlsValidation = false)
+    public static ZetaClient Build(ZetaClientConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
         var instance = new ZetaClient(IntPtr.Zero);
 
         using var mem       = new NativeMem();
         var       buildCfg  = instance.BuildNativeConfig(config, mem);
-        var       ptr       = ZetaSdkNative.ZetaSdk_buildZetaClient(buildCfg, disableTlsValidation ? (byte)1 : (byte)0);
+        var       ptr       = ZetaSdkNative.ZetaSdk_buildZetaClient(buildCfg);
 
         if (ptr == IntPtr.Zero)
             throw new ZetaSdkException("ZetaSdk_buildZetaClient returned null. Check your configuration.");
@@ -102,6 +102,30 @@ public sealed class ZetaClient : IDisposable
         ZetaSdkNative.ZetaSdk_logout(_ptr);
     }
 
+    public int Discover()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return ZetaSdkNative.ZetaSdk_discover(_ptr);
+    }
+
+    public int Register()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return ZetaSdkNative.ZetaSdk_register(_ptr);
+    }
+
+    public int Authenticate()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return ZetaSdkNative.ZetaSdk_authenticate(_ptr);
+    }
+
+    public int ClearRegistration()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return ZetaSdkNative.ZetaSdk_clearRegistration(_ptr);
+    }
+
     public void OpenWebSocket(
         string url,
         IReadOnlyDictionary<string, string>? headers,
@@ -144,8 +168,21 @@ public sealed class ZetaClient : IDisposable
        var logVTablePtr = IntPtr.Zero;
        if (cfg.Logger is { } logger)
        {
-          _customLogHandle = new CustomLogHandle(logger, cfg.LogLevel);
+          _customLogHandle = new CustomLogHandle(logger, (int)cfg.LogLevel);
           logVTablePtr = _customLogHandle.VTablePtr;
+       }
+
+       var proxyPtr = IntPtr.Zero;
+       if (cfg.Proxy is { } proxy)
+       {
+           proxyPtr = mem.Struct(new NativeProxyConfig
+           {
+               host     = mem.Str(proxy.Host),
+               port     = proxy.Port,
+               username = mem.Str(proxy.Username),
+               password = mem.Str(proxy.Password),
+               type     = (int)proxy.Type
+           });
        }
 
        var storage = mem.Struct(new NativeStorageConfig
@@ -205,6 +242,20 @@ public sealed class ZetaClient : IDisposable
             requiredOid          = mem.Str(cfg.Auth.RequiredRoleOid)
         });
 
+
+        var (caPemPtr, caPemLen) = mem.StringArray(
+            cfg.Security?.AdditionalCaPem?.ToArray() ?? []
+        );
+
+        var securityPtr = mem.Struct(new NativeSecurityConfig
+        {
+            additionalCaPem = caPemPtr,
+            additionalCaPemCount = caPemLen,
+            additionalCaFile = mem.Str(cfg.Security?.AdditionalCaFile),
+            disableServerValidation = cfg.Security?.DisableServerValidation ?? false,
+            sslVerbose = cfg.Security?.SslVerbose ?? false
+        });
+
         return mem.Struct(new NativeBuildConfig
         {
             resource       = mem.Str(cfg.Resource),
@@ -214,7 +265,9 @@ public sealed class ZetaClient : IDisposable
             storageConfig  = storage,
             tpmConfig      = tpm,
             authConfig     = auth,
-            logVTable      = logVTablePtr
+            logVTable      = logVTablePtr,
+            proxyConfig    = proxyPtr,
+            securityConfig = securityPtr
         });
     }
 

@@ -33,4 +33,5 @@ enum class SslVersion(internal val curlValue: Long) {
     DEFAULT(CURL_SSLVERSION_DEFAULT.toLong()),
     TLS_1_2(CURL_SSLVERSION_TLSv1_2.toLong()),
     TLS_1_3(CURL_SSLVERSION_TLSv1_3.toLong()),
+    TLS_1_2_TO_1_3((CURL_SSLVERSION_TLSv1_2 or CURL_SSLVERSION_MAX_TLSv1_3).toLong()),
 }

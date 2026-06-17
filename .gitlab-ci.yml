@@ -12,6 +12,10 @@ spec:
       description: 'Enables SonarQube [Quality Gate](https://docs.sonarsource.com/sonarqube-server/latest/quality-standards-administration/managing-quality-gates/introduction/) verification, except in "develop" branch and "latest" tags.'
       type: boolean
       default: true
+    do_dependency_updates_check:
+      description: 'Run Ben Manes dependency update report'
+      type: boolean
+      default: true
 
 ---
 
@@ -231,6 +235,22 @@ sonar:
     paths:
       - "**/problems-report.html"
 
+dependency-updates:
+  <<: *gradle_template
+  stage: testAndAnalysis
+  rules:
+    - if: '"$[[ inputs.do_dependency_updates_check ]]" == "true"'
+      when: on_success
+    - when: never
+  script:
+    - ./gradlew dependencyUpdates --no-parallel
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - "**/build/dependencyUpdates/report.txt"
+      - "**/build/dependencyUpdates/report.json"
+
 build:
   <<: *gradle_template
   stage: build
@@ -318,7 +338,7 @@ publish_artifacts:
     - find . -path ./reporting -prune -o -name 'bom.json' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
     - find . -path ./reporting -prune -o -name 'bom.xml' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
     # Container scan
-    - find . -path ./reporting -prune -o -name 'gl-container-scanning-report.json' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
+    - find . -path ./reporting -prune -o -name '*gl-container-scanning-report.json' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
     # Dependency Check Report
     - find . -path ./reporting -prune -o -name 'dependency-check-report.*' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
     - find . -path ./reporting -prune -o -name 'problems-report.*' -exec cp --parents '{}' ./reporting/zeta-sdk/ \;
@@ -441,9 +461,9 @@ container_scan:
     access: 'developer'
     expire_in: 1 week
     reports:
-      container_scanning: gl-container-scanning-report.json
+      container_scanning: "$PLATFORM-gl-container-scanning-report.json"
     paths:
-      - gl-container-scanning-report.json
+      - "$PLATFORM-gl-container-scanning-report.json"
     when: always
   before_script: [ ]
   cache:
@@ -462,7 +482,7 @@ container_scan:
     - time trivy image --download-db-only
     # Builds report and puts it in the default workdir $CI_PROJECT_DIR, so `artifacts:` can take it from there
     - time trivy image --exit-code 0 --format template --template "@/contrib/gitlab.tpl"
-      --output "$CI_PROJECT_DIR/gl-container-scanning-report.json" "$FULL_IMAGE_NAME"
+      --output "$CI_PROJECT_DIR/$PLATFORM-gl-container-scanning-report.json" "$FULL_IMAGE_NAME"
     # Prints full report
     - time trivy image --exit-code 0 "$FULL_IMAGE_NAME"
     # Fail on medium to critical vulnerabilities
@@ -491,15 +511,24 @@ container_scan:
         SONAR_QUALITY_GATE_ENABLED: "false"
         RELEASE_VERSION: "develop"
       allow_failure: true
-    # when merging to staging, still allow medium, but hard fail on anything above
+    # when merging to staging and release, allow medium and even high, as testdriver is only used in
+    # test environments and not in production systems
     - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging" && $RELEASE_VERSION_WEB == "latest"
       variables:
         RELEASE_VERSION: "staging-mr-$CI_COMMIT_SHORT_SHA"
-        SEVERITIES: "UNKNOWN,HIGH,CRITICAL"
+        SEVERITIES: "UNKNOWN,CRITICAL"
     - if: $CI_COMMIT_BRANCH == "staging" && $RELEASE_VERSION_WEB == "latest"
       variables:
         RELEASE_VERSION: "staging"
-        SEVERITIES: "UNKNOWN,HIGH,CRITICAL"
+        SEVERITIES: "UNKNOWN,CRITICAL"
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "release" && $RELEASE_VERSION_WEB == "latest"
+      variables:
+        RELEASE_VERSION: "release-mr-$CI_COMMIT_SHORT_SHA"
+        SEVERITIES: "UNKNOWN,CRITICAL"
+    - if: $CI_COMMIT_BRANCH == "release" && $RELEASE_VERSION_WEB == "latest"
+      variables:
+        RELEASE_VERSION: "release"
+        SEVERITIES: "UNKNOWN,CRITICAL"
     - !reference [ .image_template, rules]
 
 publish_to_dependencytrack:

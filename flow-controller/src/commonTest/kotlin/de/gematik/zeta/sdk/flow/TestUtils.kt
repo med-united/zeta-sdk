@@ -33,10 +33,8 @@ import de.gematik.zeta.sdk.configuration.models.BearerMethod
 import de.gematik.zeta.sdk.configuration.models.ProtectedResourceMetadata
 import de.gematik.zeta.sdk.configuration.models.ZetaAslUse
 import de.gematik.zeta.sdk.flow.RequestEvaluatorImplTest.FakeForwardingClient
-import de.gematik.zeta.sdk.network.http.client.ZetaHttpResponse
 import de.gematik.zeta.sdk.storage.InMemoryStorage
 import de.gematik.zeta.sdk.storage.SdkStorage
-import io.ktor.client.request.HttpRequestBuilder
 import kotlinx.serialization.json.Json
 import kotlin.collections.Map
 
@@ -112,14 +110,14 @@ class FakeValidator(
 fun getDummyAuthServerObject(
     issuer: String = "",
     token_endpoint: String = "",
-    openidProvidersEndpoint: String = "",
+    registrationEndpoint: String = "",
 ): AuthorizationServerMetadata =
     AuthorizationServerMetadata(
         issuer = issuer,
         authorizationEndpoint = "",
         tokenEndpoint = token_endpoint,
         nonceEndpoint = "",
-        openidProvidersEndpoint = openidProvidersEndpoint,
+        openidProvidersEndpoint = "",
         jwksUri = "",
         scopesSupported = listOf(""),
         responseTypesSupported = listOf("TOKEN"),
@@ -130,15 +128,7 @@ fun getDummyAuthServerObject(
         serviceDocumentation = "",
         uiLocalesSupported = listOf(""),
         codeChallengeMethodsSupported = listOf(""),
-        apiVersionsSupported =
-        listOf(
-            ApiVersion(
-                majorVersion = 1,
-                version = "",
-                status = ApiVersionStatus.STABLE,
-                documentationUri = "",
-            ),
-        ),
+        registrationEndpoint = registrationEndpoint,
     )
 
 /**
@@ -186,7 +176,7 @@ suspend fun getDummyContextWithResource(fwdClient: ForwardingClient = FakeForwar
     val good = getDummyProtectedResourceObject("test", listOf("https://auth.example.com"))
     ctx.configurationStorage.saveProtectedResource(Json.encodeToString(good))
 
-    val authServer = getDummyAuthServerObject(openidProvidersEndpoint = "test", issuer = "issuer")
+    val authServer = getDummyAuthServerObject(registrationEndpoint = "test", issuer = "issuer")
     ctx.configurationStorage.linkResourceToAuthorizationServer("test", authServer)
 
     return ctx

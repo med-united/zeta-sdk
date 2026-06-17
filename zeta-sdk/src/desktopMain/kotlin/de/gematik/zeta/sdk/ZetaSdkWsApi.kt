@@ -108,7 +108,14 @@ fun ZetaSdk_Client_ws(
         zetaHttpClient.ws(
             targetUrl = targetUrl,
             builder = {
-                disableServerValidation(disableServerValidation)
+                disableServerValidation(globalHttpSecurityConfig.disableServerValidation)
+                globalHttpSecurityConfig.additionalCaPem.forEach { pem ->
+                    addCaPem(pem)
+                }
+                globalHttpSecurityConfig.additionalCaFile?.let { file ->
+                    addCaPemFile(file)
+                }
+                globalHttpSecurityConfig.proxyConfig?.let { proxy(it) }
             },
             block = {
                 val cWsSession = nativeHeap.alloc<ZetaSdk_WSSession>().let { cSession ->

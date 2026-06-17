@@ -27,7 +27,6 @@ import de.gematik.zeta.logging.Log
 import de.gematik.zeta.platform.getPlatformInfo
 import de.gematik.zeta.sdk.attestation.model.AttestationConfig
 import de.gematik.zeta.sdk.attestation.model.ClientAssertionJwt
-import de.gematik.zeta.sdk.attestation.model.ClientSelfAssessment
 import de.gematik.zeta.sdk.attestation.model.ClientStatement
 import de.gematik.zeta.sdk.attestation.model.PlatformProductId
 import de.gematik.zeta.sdk.attestation.model.PostureType
@@ -129,13 +128,23 @@ class AttestationApiImpl(
         val statementJson = when (attestationConfig) {
             is AttestationConfig.Software -> {
                 Log.i { "Getting software client statement" }
+
+                // Temporary Fix for ZETAP-1146
+                var actualPlatformProductId: PlatformProductId?
+                actualPlatformProductId = platformProductId
+                if (platformProductId is PlatformProductId.AppleProductId) {
+                    // At this time, due to schema issues, Software Assertion does not work with Apple PlatformProductId.
+                    // Therefore, we set it to null in this case, as it is optional.
+                    actualPlatformProductId = null
+                }
+
                 getSoftwareStatement(
                     attChallenge,
                     clientInstanceKeys.encoded,
                     productId,
                     productVersion,
                     clientId,
-                    platformProductId,
+                    actualPlatformProductId,
                 )
             }
 
@@ -150,7 +159,7 @@ class AttestationApiImpl(
         Log.i { "Getting client assertion jwt" }
         val clientAssertion = ClientAssertionJwt(
             header = ClientAssertionJwt.Header(alg = AsymAlg.ES256.name, typ = "JWT", jwk = clientInstanceKeys.jwk),
-            payload = ClientAssertionJwt.Payload(clientId, clientId, listOf(tokenEndpoint), exp, jti, attestationConfig.type, statementJson, ClientSelfAssessment("", clientId, "", "", "test@emailtest.de", clockEpochSeconds(), platformProductId)),
+            payload = ClientAssertionJwt.Payload(clientId, clientId, listOf(tokenEndpoint), exp, jti, attestationConfig.type, statementJson),
         )
 
         return getJwt(clientAssertion)
@@ -175,7 +184,7 @@ class AttestationApiImpl(
         productId: String,
         productVersion: String,
         sub: String,
-        platformProductId: PlatformProductId,
+        platformProductId: PlatformProductId?,
     ): ClientStatement {
         val publicKey = Base64.encode(encoded)
         val attestationTimestamp: Long = clockEpochSeconds()
@@ -258,7 +267,6 @@ class AttestationApiImpl(
             jwt.payload.clientStatement.let { statement ->
                 put(jwt.payload.attestationType.getClaimName(), json.encodeToJsonElement(statement))
             }
-            put("urn:telematik:client-self-assessment", json.encodeToJsonElement(jwt.payload.clientSelfAssessment))
         }
 
         val payloadB64 = b64url(payloadJson.toString().toByteArray(Charsets.UTF_8))

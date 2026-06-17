@@ -40,9 +40,6 @@ import de.gematik.zeta.sdk.flow.FlowContext
 import de.gematik.zeta.sdk.flow.FlowNeed
 import de.gematik.zeta.sdk.tpm.TpmProvider
 import io.ktor.http.HttpHeaders
-import io.ktor.http.URLBuilder
-import io.ktor.http.Url
-import io.ktor.http.encodedPath
 import kotlin.time.TimeSource
 import kotlin.time.measureTimedValue
 
@@ -210,8 +207,9 @@ class EnsureAccessTokenHandler(
                 "Missing client_id for resource ${ctx.resource}"
             }
         }
-        val issuer = requireNotBlank(ctx.configurationStorage.getAuthServer(ctx.resource)?.issuer) {
-            "Missing issuer for resource: $ctx.resource"
+
+        val audience = requireNotBlank(ctx.configurationStorage.getProtectedResource(ctx.resource)?.resource) {
+            "Missing resource value in OPR: $ctx.resource"
         }
 
         val scopes = authConfig.scopes.ifEmpty { authServer.scopesSupported }
@@ -227,7 +225,7 @@ class EnsureAccessTokenHandler(
                 productVersion = productVersion,
                 expiration = authConfig.exp,
                 scopes = scopes,
-                audience = audienceFromIssuer(issuer),
+                audience = audience,
                 platformProductId,
             ),
         )
@@ -253,15 +251,4 @@ class EnsureAccessTokenHandler(
         val token = getAuthToken(ctx, dpopKey.jwk.kid)
         return AccessTokenWithDpopKey(token, dpopKey)
     }
-}
-
-fun audienceFromIssuer(issuer: String): String {
-    val authUrl = Url(issuer)
-
-    return URLBuilder().apply {
-        protocol = authUrl.protocol
-        host = authUrl.host
-        port = authUrl.port
-        encodedPath = "/auth/"
-    }.buildString()
 }

@@ -59,6 +59,11 @@ public class PrescriptionListViewModel(
         state.update { PrescriptionListState.Result(list) }
     }
 
+    internal fun forgetRegistration() = launch(ioDispatcher) {
+        repository.forgetRegistration()
+        state.update { PrescriptionListState.Result(list) }
+    }
+
     internal fun statusSdk() = launch(ioDispatcher) {
         val status = repository.status()
         state.update { PrescriptionListState.StatusResult(status) }

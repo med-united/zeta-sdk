@@ -142,7 +142,7 @@ class AttestationServer(
                     if (frame is Frame.Text) {
                         val text = frame.readText()
                         Log.i { "Frame.Text: $text" }
-                        val request = Json.decodeFromString<FileMonitorRequest>(text)
+                        val request = json.decodeFromString<FileMonitorRequest>(text)
                         service.fileMonitor(request) { file, event ->
                             val response = Json.encodeToString(FileMonitorResponse(file, event))
                             runBlocking { send(Frame.Text(response)) }

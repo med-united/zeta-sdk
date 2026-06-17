@@ -29,7 +29,7 @@ import kotlinx.serialization.json.JsonElement
 
 @Serializable
 data class SoftwarePosture(
-    @SerialName("platform_product_id") val platformProductId: PlatformProductId,
+    @SerialName("platform_product_id") val platformProductId: PlatformProductId? = null,
     @SerialName("product_id") val productId: String,
     @SerialName("product_version")val productVersion: String,
     /* Operating system name*/
@@ -106,6 +106,6 @@ data class AssertionAuthenticatorData(
     val counter: Int,
 )
 
-expect suspend fun buildPosture(platformProductId: PlatformProductId, productId: String, productVersion: String, attChallenge: String, publicKeyB64: String): JsonElement
+expect suspend fun buildPosture(platformProductId: PlatformProductId?, productId: String, productVersion: String, attChallenge: String, publicKeyB64: String): JsonElement
 expect suspend fun getPlatform(): Platform
 expect fun getPostureType(): PostureType

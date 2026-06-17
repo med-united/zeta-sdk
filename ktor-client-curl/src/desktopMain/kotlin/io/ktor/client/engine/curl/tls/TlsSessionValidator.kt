@@ -50,6 +50,7 @@ import io.ktor.client.engine.curl.X509_get_signature_nid
 import io.ktor.client.engine.curl.X509_get_subject_name
 import io.ktor.client.engine.curl.i2d_X509
 import io.ktor.client.engine.curl.internal.EasyHandle
+import io.ktor.client.engine.curl.internal.PendingRevocationData
 import io.ktor.client.engine.curl.internal.getInfo
 import io.ktor.client.engine.curl.ktor_general_name_dns
 import io.ktor.client.engine.curl.ktor_sk_GENERAL_NAME_num
@@ -78,25 +79,39 @@ import libcurl.CURLINFO_EFFECTIVE_URL
 import libcurl.CURLINFO_TLS_SSL_PTR
 import libcurl.curl_tlssessioninfo
 
-@OptIn(ExperimentalForeignApi::class, UnsafeNumber::class)
 internal fun validateTlsSession(
     easyHandle: EasyHandle,
     config: TlsValidationConfig? = null,
-) = memScoped {
-    val ssl = resolveSslPointer(easyHandle) ?: return@memScoped
+    staple: ByteArray?,
+): PendingRevocationData? = memScoped {
+
+    val ssl = resolveSslPointer(easyHandle) ?: run {
+        return@memScoped null
+    }
     val protocol = inspectProtocol(ssl)
     val cipherName = inspectCipher(ssl)
-    val leafCertInfo = inspectCertChain(ssl) ?: return@memScoped
-    val host = resolveHost(easyHandle) ?: return@memScoped
+    val leafCertInfo = inspectCertChain(ssl) ?: run {
+        return@memScoped null
+    }
+    val host = resolveHost(easyHandle) ?: run {
+        return@memScoped null
+    }
 
-    config?.onSessionValidated?.invoke(
-        TlsSessionData(
-            protocol = protocol,
-            cipherSuite = cipherName,
-            leafCertInfo = leafCertInfo,
-            host = host,
-        ),
-    )
+    try {
+        val result = config?.onSessionValidated?.invoke(
+            TlsSessionData(
+                protocol = protocol,
+                cipherSuite = cipherName,
+                leafCertInfo = leafCertInfo,
+                host = host,
+                staple = staple,
+            ),
+        )
+        result
+    } catch (e: Throwable) {
+        config?.lastError = e
+        null
+    }
 }
 
 private fun resolveHost(easyHandle: EasyHandle): String? = memScoped {
@@ -111,17 +126,9 @@ private fun resolveSslPointer(easyHandle: EasyHandle): CPointer<SSL>? = memScope
     val tlsInfoPtr = alloc<COpaquePointerVar>()
     easyHandle.getInfo(CURLINFO_TLS_SSL_PTR, tlsInfoPtr.ptr)
 
-    val tlsSessionInfo = tlsInfoPtr.value?.reinterpret<curl_tlssessioninfo>()?.pointed
-    if (tlsSessionInfo == null) {
-        println("Could not get TLS session info")
-        return null
-    }
+    val tlsSessionInfo = tlsInfoPtr.value?.reinterpret<curl_tlssessioninfo>()?.pointed ?: return null
 
-    val ssl = tlsSessionInfo.internals?.reinterpret<SSL>()
-    if (ssl == null) {
-        println("Could not get SSL pointer")
-        return null
-    }
+    val ssl = tlsSessionInfo.internals?.reinterpret<SSL>() ?: return null
 
     ssl
 }
@@ -144,7 +151,6 @@ private fun inspectCipher(ssl: CPointer<SSL>): String? = memScoped {
 private fun inspectCertChain(ssl: CPointer<SSL>): LeafCertInfo? {
     val certChain = SSL_get_peer_cert_chain(ssl)
     if (certChain == null) {
-        println("No peer cert chain available")
         return null
     }
 

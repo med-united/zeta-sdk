@@ -171,6 +171,11 @@ void runWSSessionSample(ZetaSdk_Client* zetaSdkClient, char* wsBaseUrl, char* ws
     ZetaSdk_Client_ws(zetaSdkClient, (void*)wsBaseUrl, strlen(wsBaseUrl), (void*)wsHandler, httpHeaders, ARRAY_SIZE(httpHeaders));
 }
 
+void my_custom_log(void* ctx, const char* level, const char* tag, const char* message) {
+    std::cout << "[" << level << "] [" << (tag ? tag : "Zeta") << "] " << message << "\n";
+    std::cout.flush();
+}
+
 int main() {
     std::cout << "Hello Zeta from C++ WebSocket!\n";
 
@@ -200,15 +205,41 @@ int main() {
     ZetaSdk_TpmConfig tpmConfig = {};
     ZetaSdk_SmbConfig smbConfig = { keystoreFile, alias, password };
     ZetaSdk_AuthConfig authConfig = { scopes, ARRAY_SIZE(scopes), 30, aslProd, &smbConfig, nullptr, requiredRoleOid };
+
+    char* caPem[] = {
+            const_cast<char*>(R"(-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----)")
+    };
+
+    const char* caPemFile = "/path/to/ca.crt";
+
+    ZetaSdk_SecurityConfig security = {};
+    security.additionalCaPem = const_cast<char**>(caPem);
+    security.additionalCaPemCount = 1;
+    //security.additionalCaFile = const_cast<char*>(caPemFile);
+    //security.disableServerValidation = disableTls;
+    //security.sslVerbose = false;
+
+    // Custom log callback
+    ZetaSdk_LogVTable logVTable = {
+            nullptr,
+            my_custom_log,
+            ZETA_LOG_LEVEL_DEBUG
+    };
+
     ZetaSdk_BuildConfig buildConfig = {
             resource,
             const_cast<char*>(PRODUCT_ID),
             const_cast<char*>(PRODUCT_VERSION),
             const_cast<char*>(CLIENT_NAME),
-            &storageConfig, &tpmConfig, &authConfig
+            &storageConfig, &tpmConfig, &authConfig,
+            &logVTable,
+            nullptr,
+            &security
     };
 
-    ZetaSdk_Client* sdkClient = (ZetaSdk_Client*)ZetaSdk_buildZetaClient(&buildConfig, disableTls);
+    ZetaSdk_Client* sdkClient = (ZetaSdk_Client*)ZetaSdk_buildZetaClient(&buildConfig);
     runWSSessionSample(sdkClient, wsBaseUrl, wsContextPath, poppToken);
     ZetaSdk_clearZetaClient(sdkClient);
 

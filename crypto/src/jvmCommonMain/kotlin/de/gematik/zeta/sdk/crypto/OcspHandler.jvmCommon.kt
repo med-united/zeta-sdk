@@ -63,13 +63,30 @@ actual class OcspHandlerImpl actual constructor() : OcspHandler {
         val basicResp = OCSPResp(ocspResponseDer).responseObject as BasicOCSPResp
         return basicResp.producedAt.toInstant().epochSecond
     }
+
+    actual override fun getNextUpdateEpochSeconds(
+        ocspResponseDer: ByteArray,
+        certDer: ByteArray,
+        issuerDer: ByteArray,
+    ): Long? {
+        val ocspResp = OCSPResp(ocspResponseDer)
+        val basicResp = ocspResp.responseObject as BasicOCSPResp
+        val cert = parse(certDer)
+
+        val singleResp = basicResp.responses
+            .firstOrNull { it.certID.serialNumber == cert.serialNumber }
+            ?: return null
+
+        return singleResp.nextUpdate?.toInstant()?.epochSecond
+    }
+
     actual override fun validate(
         ocspResponseDer: ByteArray,
         certDer: ByteArray,
         issuerDer: ByteArray,
     ) {
         val ocspResp = OCSPResp(ocspResponseDer)
-        Log.i { "OCSP: response status: ${ocspResp.status}" }
+        Log.d { "OCSP: response status: ${ocspResp.status}" }
         require(ocspResp.status == OCSPResponseStatus.SUCCESSFUL) {
             "OCSP response status not successful: ${ocspResp.status}"
         }
@@ -77,14 +94,14 @@ actual class OcspHandlerImpl actual constructor() : OcspHandler {
         val basicResp = ocspResp.responseObject as BasicOCSPResp
         val cert = parse(certDer)
         val issuer = parse(issuerDer)
-        Log.i { "OCSP: Validating cert: ${cert.subjectX500Principal}" }
-        Log.i { "OCSP: Issuer: ${issuer.subjectX500Principal}" }
+        Log.d { "OCSP: Validating cert: ${cert.subjectX500Principal}" }
+        Log.d { "OCSP: Issuer: ${issuer.subjectX500Principal}" }
 
         val signerCert = basicResp.certs
             ?.firstOrNull()
             ?.let { JcaX509CertificateConverter().setProvider("BC").getCertificate(it) }
             ?: issuer
-        Log.i { "OCSP signer cert: ${signerCert.subjectX500Principal}" }
+        Log.d { "OCSP signer cert: ${signerCert.subjectX500Principal}" }
 
         require(
             basicResp.isSignatureValid(
@@ -93,17 +110,16 @@ actual class OcspHandlerImpl actual constructor() : OcspHandler {
                     .build(signerCert.publicKey),
             ),
         ) { "OCSP response signature invalid" }
-        Log.i { "OCSP signature valid" }
+        Log.d { "OCSP signature valid" }
 
         val digestCalcProvider = JcaDigestCalculatorProviderBuilder().setProvider("BC").build()
         val issuerHolder = JcaX509CertificateHolder(issuer)
         val singleResp = basicResp.responses
             .firstOrNull {
-                it.certID.matchesIssuer(issuerHolder, digestCalcProvider)
-                it.certID.serialNumber == cert.serialNumber
+                it.certID.matchesIssuer(issuerHolder, digestCalcProvider) && it.certID.serialNumber == cert.serialNumber
             }
             ?: error("OCSP response does not match certificate serial")
-        Log.i { "Matched OCSP response for serial: ${cert.serialNumber}" }
+        Log.d { "Matched OCSP response for serial: ${cert.serialNumber}" }
 
         val now = java.util.Date()
         Log.i { "Current update: ${singleResp.thisUpdate}, Next update : ${singleResp.nextUpdate}, now=$now" }
@@ -130,10 +146,10 @@ actual class OcspHandlerImpl actual constructor() : OcspHandler {
         val ocspUrl = extractOcspUrl(cert)
             ?: error("Certificate has no OCSP URL in AIA extension")
 
-        Log.i { "Building OCSP request for cert serial: ${cert.serialNumber}" }
-        Log.i { "Cert subject: ${cert.subjectX500Principal}" }
-        Log.i { "Cert issuer: ${cert.issuerX500Principal}" }
-        Log.i { "OCSP URL: $ocspUrl" }
+        Log.d { "Building OCSP request for cert serial: ${cert.serialNumber}" }
+        Log.d { "Cert subject: ${cert.subjectX500Principal}" }
+        Log.d { "Cert issuer: ${cert.issuerX500Principal}" }
+        Log.d { "OCSP URL: $ocspUrl" }
 
         val digestCalcProvider = JcaDigestCalculatorProviderBuilder().setProvider("BC").build()
         val certHolder = JcaX509CertificateHolder(cert)
@@ -151,8 +167,7 @@ actual class OcspHandlerImpl actual constructor() : OcspHandler {
         val ocspReq = requestBuilder.build()
         val requestDer = ocspReq.encoded
 
-        Log.i { "OCSP request size: ${requestDer.size} bytes" }
-        Log.i { "OCSP request hex (first 64 bytes): ${requestDer.take(64).joinToString("") { "%02x".format(it) }}" }
+        Log.d { "OCSP request size: ${requestDer.size} bytes" }
 
         return OcspRequestData(
             url = ocspUrl,

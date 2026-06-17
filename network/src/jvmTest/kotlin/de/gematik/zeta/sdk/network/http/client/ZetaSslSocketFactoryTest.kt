@@ -47,11 +47,20 @@ package de.gematik.zeta.sdk.network.http.client
  * #L%
  */
 
+import de.gematik.zeta.sdk.crypto.OcspHandler
+import de.gematik.zeta.sdk.crypto.OcspRequestData
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaCipherSuites
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaSignatureAlgorithms
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaTlsCurves
 import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaTlsProtocols
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
 import io.mockk.Runs
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -80,13 +89,16 @@ import javax.net.ssl.SSLParameters
 import javax.net.ssl.SSLSession
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.X509TrustManager
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Clock
 
 class ZetaSslSocketFactoryTest {
     companion object {
@@ -102,8 +114,10 @@ class ZetaSslSocketFactoryTest {
     private val validEnabledSuites: Array<String> =
         (ZetaCipherSuites.REQUIRED_TLS_1_2 + ZetaCipherSuites.TLS_1_3_SUITES).toTypedArray()
 
-    private fun buildFactory(delegate: SSLSocketFactory = mockk()) =
-        ZetaSslSocketFactory(delegate)
+    private fun buildFactory(
+        delegate: SSLSocketFactory = mockk(),
+        trustManager: X509TrustManager = mockk(relaxed = true),
+    ) = ZetaSslSocketFactory(delegate, trustManager)
 
     private fun buildMockSocket(
         params: SSLParameters = SSLParameters(),
@@ -137,6 +151,7 @@ class ZetaSslSocketFactoryTest {
         JcaContentSignerBuilder("SHA256WithECDSA").setProvider("BC").build(caKeyPair.private)
     }
     private val now = java.util.Date()
+    private val oneYear = java.util.Date(now.time + 365L * 24 * 60 * 60 * 1000)
     private fun buildValidX509Cert(): X509Certificate {
         val oneYear = java.util.Date(now.time + 365L * 24 * 60 * 60 * 1000)
         return JcaX509CertificateConverter().setProvider("BC").getCertificate(
@@ -171,7 +186,8 @@ class ZetaSslSocketFactoryTest {
     }
 
     private fun buildHandshakeEvent(
-        cert: X509Certificate? = null,
+        cert: X509Certificate? = buildValidX509Cert(),
+        issuer: X509Certificate? = buildCaCert(),
         peerHost: String = "valid.example.com",
         eventSocket: SSLSocket = mockk(relaxed = true),
     ): HandshakeCompletedEvent {
@@ -179,12 +195,22 @@ class ZetaSslSocketFactoryTest {
         every { session.cipherSuite } returns "TLS_AES_128_GCM_SHA256"
         every { session.protocol } returns "TLSv1.3"
         every { session.peerHost } returns peerHost
-        every { session.peerCertificates } returns
-            if (cert != null) arrayOf(cert) else emptyArray()
-
+        every { session.peerCertificates } returns when {
+            cert != null && issuer != null -> arrayOf(cert, issuer)
+            cert != null -> arrayOf(cert)
+            else -> emptyArray()
+        }
         val event = HandshakeCompletedEvent(eventSocket, session)
         return event
     }
+
+    fun buildCaCert(): X509Certificate =
+        JcaX509CertificateConverter().setProvider("BC").getCertificate(
+            JcaX509v3CertificateBuilder(
+                caName, BigInteger.TWO, now, oneYear,
+                caName, caKeyPair.public,
+            ).build(caSigner),
+        )
 
     @Test
     fun getDefaultCipherSuites_returnsFullIanaList() {
@@ -476,11 +502,15 @@ class ZetaSslSocketFactoryTest {
 
     @Test
     fun onHandshakeCompleted_doesNotCloseSocket_whenCertValidationPasses() {
-        val listener = captureHandshakeListener()
+        val listener = captureHandshakeListenerWithOcsp()
         val eventSocket = mockk<SSLSocket>(relaxed = true)
-
-        listener.handshakeCompleted(buildHandshakeEvent(cert = buildValidX509Cert(), eventSocket = eventSocket))
-
+        listener.handshakeCompleted(
+            buildHandshakeEvent(
+                cert = buildValidX509Cert(),
+                issuer = buildCaCert(),
+                eventSocket = eventSocket,
+            ),
+        )
         verify(exactly = 0) { eventSocket.close() }
     }
 
@@ -544,23 +574,347 @@ class ZetaSslSocketFactoryTest {
         val slot2 = slot<HandshakeCompletedListener>()
         every { socket1.addHandshakeCompletedListener(capture(slot1)) } just Runs
         every { socket2.addHandshakeCompletedListener(capture(slot2)) } just Runs
-
         var callCount = 0
         val delegate = mockk<SSLSocketFactory>()
         every { delegate.createSocket(any<String>(), any<Int>()) } answers {
             if (callCount++ == 0) socket1 else socket2
         }
-        val factory = buildFactory(delegate)
+        val ocspHandler = buildOcspHandler()
+        val factory = buildFactoryWithOcsp(
+            delegate = delegate,
+            ocspHandler = ocspHandler,
+            issuerFromStore = buildCaCert(),
+            allowSkipForTestCertificates = true,
+        )
         factory.createSocket("host", 443)
         factory.createSocket("host", 443)
-
         val eventSocket1 = mockk<SSLSocket>(relaxed = true)
         val eventSocket2 = mockk<SSLSocket>(relaxed = true)
-
         slot1.captured.handshakeCompleted(buildHandshakeEvent(cert = buildExpiredX509Cert(), eventSocket = eventSocket1))
         slot2.captured.handshakeCompleted(buildHandshakeEvent(cert = buildValidX509Cert(), eventSocket = eventSocket2))
-
         verify(exactly = 1) { eventSocket1.close() }
         verify(exactly = 0) { eventSocket2.close() }
+    }
+
+    @Test
+    fun onHandshakeCompleted_extractsStaple_whenExtendedSessionWithStatusResponse() {
+        val stapleBytes = byteArrayOf(1, 2, 3, 4, 5)
+        var capturedStaple: ByteArray? = null
+        val listener = captureHandshakeListenerWithStapleCallback { capturedStaple = it }
+        val session = buildExtendedSession(staple = stapleBytes)
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+        every { eventSocket.session } returns session
+
+        listener.handshakeCompleted(buildHandshakeEventWithSession(session, eventSocket))
+
+        assertContentEquals(stapleBytes, capturedStaple)
+    }
+
+    @Test
+    fun onHandshakeCompleted_stapleIsNull_whenSessionNotExtended() {
+        var capturedStaple: ByteArray? = byteArrayOf(1) // non-null initial
+        val listener = captureHandshakeListenerWithStapleCallback { capturedStaple = it }
+        val session = buildNonExtendedSession()
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+        every { eventSocket.session } returns session
+
+        listener.handshakeCompleted(buildHandshakeEventWithSession(session, eventSocket))
+
+        assertNull(capturedStaple)
+    }
+
+    @Test
+    fun onHandshakeCompleted_stapleIsNull_whenStatusResponsesEmpty() {
+        var capturedStaple: ByteArray? = byteArrayOf(1)
+        val listener = captureHandshakeListenerWithStapleCallback { capturedStaple = it }
+        val session = buildExtendedSession(staple = null)
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+        every { eventSocket.session } returns session
+
+        listener.handshakeCompleted(buildHandshakeEventWithSession(session, eventSocket))
+
+        assertNull(capturedStaple)
+    }
+
+    @Test
+    fun onHandshakeCompleted_closesSocket_whenCertHasNoSan() {
+        val certNoSan = JcaX509CertificateConverter().setProvider("BC").getCertificate(
+            JcaX509v3CertificateBuilder(
+                caName, BigInteger.TEN,
+                now, java.util.Date(now.time + 365L * 24 * 60 * 60 * 1000),
+                X500Name("CN=NoSan"), caKeyPair.public,
+            ).build(caSigner),
+        )
+        val listener = captureHandshakeListener()
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+        every { eventSocket.session } returns buildNonExtendedSession(cert = certNoSan)
+
+        listener.handshakeCompleted(buildHandshakeEvent(cert = certNoSan, eventSocket = eventSocket))
+
+        verify(exactly = 1) { eventSocket.close() }
+    }
+
+    @Test
+    fun onHandshakeCompleted_closesSocket_whenSanDoesNotMatchHost() {
+        val listener = captureHandshakeListener()
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+
+        listener.handshakeCompleted(
+            buildHandshakeEvent(
+                cert = buildValidX509Cert(),
+                peerHost = "other.example.com",
+                eventSocket = eventSocket,
+            ),
+        )
+
+        verify(exactly = 1) { eventSocket.close() }
+    }
+
+    @Test
+    fun onHandshakeCompleted_doesNotCloseSocket_whenSanMatchesHost() {
+        val listener = captureHandshakeListenerWithOcsp()
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+        listener.handshakeCompleted(
+            buildHandshakeEvent(
+                cert = buildValidX509Cert(),
+                issuer = buildCaCert(),
+                peerHost = "valid.example.com",
+                eventSocket = eventSocket,
+            ),
+        )
+        verify(exactly = 0) { eventSocket.close() }
+    }
+
+    @Test
+    fun findIssuer_returnsMatchingCa_whenCertSignedByTrustManagerIssuer() {
+        val trustManager = mockk<X509TrustManager>()
+        val caCert = mockk<X509Certificate>()
+        every { trustManager.acceptedIssuers } returns arrayOf(caCert)
+        every { caCert.publicKey } returns caKeyPair.public
+
+        val cert = buildValidX509Cert() // signed by caKeyPair
+        val factory = buildFactory(trustManager = trustManager)
+
+        assertEquals(caCert, factory.findIssuer(cert))
+    }
+
+    @Test
+    fun findIssuer_returnsNull_whenNoCaMatchesCert() {
+        val trustManager = mockk<X509TrustManager>()
+        val wrongKeyPair = KeyPairGenerator.getInstance("EC", "BC")
+            .apply { initialize(ECGenParameterSpec("secp256r1")) }
+            .generateKeyPair()
+        val wrongCa = mockk<X509Certificate>()
+        every { trustManager.acceptedIssuers } returns arrayOf(wrongCa)
+        every { wrongCa.publicKey } returns wrongKeyPair.public
+
+        val cert = buildValidX509Cert()
+        val factory = buildFactory(trustManager = trustManager)
+
+        assertNull(factory.findIssuer(cert))
+    }
+
+    @Test
+    fun findIssuer_returnsNull_whenAcceptedIssuersIsEmpty() {
+        val trustManager = mockk<X509TrustManager>()
+        every { trustManager.acceptedIssuers } returns emptyArray()
+
+        val factory = buildFactory(trustManager = trustManager)
+
+        assertNull(factory.findIssuer(buildValidX509Cert()))
+    }
+
+    @Test
+    fun findIssuer_returnsFirstMatchingCa_whenMultipleIssuersPresent() {
+        val trustManager = mockk<X509TrustManager>()
+        val wrongKeyPair = KeyPairGenerator.getInstance("EC", "BC")
+            .apply { initialize(ECGenParameterSpec("secp256r1")) }
+            .generateKeyPair()
+        val wrongCa = mockk<X509Certificate>()
+        val correctCa = mockk<X509Certificate>()
+        every { trustManager.acceptedIssuers } returns arrayOf(wrongCa, correctCa)
+        every { wrongCa.publicKey } returns wrongKeyPair.public
+        every { correctCa.publicKey } returns caKeyPair.public
+
+        val cert = buildValidX509Cert()
+        val factory = buildFactory(trustManager = trustManager)
+
+        assertEquals(correctCa, factory.findIssuer(cert))
+    }
+
+    @Test
+    fun onHandshakeCompleted_callsOcsp_whenChainHasLeafAndIssuer() {
+        val ocspHandler = buildOcspHandler()
+        val listener = captureHandshakeListenerWithOcsp(ocspHandler = ocspHandler)
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+        val cert = buildValidX509Cert()
+        val issuer = buildCaCert()
+
+        listener.handshakeCompleted(
+            buildHandshakeEvent(cert = cert, issuer = issuer, eventSocket = eventSocket),
+        )
+
+        coVerify(exactly = 1) { ocspHandler.prepareOcspRequest(any(), any()) }
+    }
+
+    @Test
+    fun onHandshakeCompleted_callsOcsp_whenTls13ChainHasOnlyLeafAndIssuerFoundInTrustStore() {
+        val ocspHandler = buildOcspHandler()
+        val issuer = buildCaCert()
+        val listener = captureHandshakeListenerWithOcsp(
+            ocspHandler = ocspHandler,
+            issuerFromStore = issuer,
+        )
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+        val cert = buildValidX509Cert()
+
+        listener.handshakeCompleted(
+            buildHandshakeEvent(cert = cert, issuer = null, eventSocket = eventSocket),
+        )
+
+        coVerify(exactly = 1) { ocspHandler.prepareOcspRequest(any(), any()) }
+    }
+
+    @Test
+    fun onHandshakeCompleted_closesSocket_whenIssuerNotFoundInTrustStore() {
+        val ocspHandler = buildOcspHandler()
+        val listener = captureHandshakeListenerWithOcsp(
+            ocspHandler = ocspHandler,
+            issuerFromStore = null,
+        )
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+
+        listener.handshakeCompleted(
+            buildHandshakeEvent(cert = buildValidX509Cert(), issuer = null, eventSocket = eventSocket),
+        )
+
+        verify(exactly = 1) { eventSocket.close() }
+        coVerify(exactly = 0) { ocspHandler.prepareOcspRequest(any(), any()) }
+    }
+
+    @Test
+    fun onHandshakeCompleted_closesSocket_whenOcspFails() {
+        val ocspHandler = buildOcspHandler()
+        coEvery { ocspHandler.prepareOcspRequest(any(), any()) } throws RuntimeException("revoked")
+        val listener = captureHandshakeListenerWithOcsp(ocspHandler = ocspHandler)
+        val eventSocket = mockk<SSLSocket>(relaxed = true)
+
+        listener.handshakeCompleted(
+            buildHandshakeEvent(
+                cert = buildValidX509Cert(),
+                issuer = buildCaCert(),
+                eventSocket = eventSocket,
+            ),
+        )
+
+        verify(exactly = 1) { eventSocket.close() }
+    }
+
+    private fun buildFactoryWithOcsp(
+        delegate: SSLSocketFactory = mockk(),
+        trustManager: X509TrustManager = mockk(relaxed = true),
+        ocspHandler: OcspHandler = mockk(relaxed = true),
+        allowSkipForTestCertificates: Boolean = true,
+        httpClient: HttpClient = buildMockHttpClient(),
+        issuerFromStore: X509Certificate? = null,
+    ): ZetaSslSocketFactory {
+        val factory = ZetaSslSocketFactory(
+            delegate = delegate,
+            trustManager = trustManager,
+            ocspHandler = ocspHandler,
+            allowSkipForTestCertificates = allowSkipForTestCertificates,
+            httpClient = httpClient,
+        )
+        every { trustManager.acceptedIssuers } returns
+            if (issuerFromStore != null) arrayOf(issuerFromStore) else emptyArray()
+        return factory
+    }
+
+    private fun buildMockHttpClient(): HttpClient = HttpClient(MockEngine) {
+        engine {
+            addHandler {
+                respond(
+                    content = ByteArray(128) { it.toByte() },
+                    status = HttpStatusCode.OK,
+                    headers = headersOf("Content-Type", "application/ocsp-response"),
+                )
+            }
+        }
+    }
+
+    private fun buildOcspHandler(
+        nextUpdate: Long = Clock.System.now().epochSeconds + 3600,
+        validateThrows: Exception? = null,
+    ): OcspHandler = mockk<OcspHandler>().also {
+        every { it.getNextUpdateEpochSeconds(any(), any(), any()) } returns nextUpdate
+        every { it.getProducedAtEpochSeconds(any()) } returns Clock.System.now().epochSeconds
+        every { it.validate(any(), any(), any()) } answers {
+            validateThrows?.let { ex -> throw ex }
+        }
+        coEvery { it.prepareOcspRequest(any(), any()) } returns OcspRequestData(
+            "https://ocsp.example.com", byteArrayOf(1),
+        )
+        every { it.extractCrlUrl(any()) } returns null
+        every { it.validateCrl(any(), any(), any()) } just Runs
+    }
+
+    private fun captureHandshakeListenerWithOcsp(
+        ocspHandler: OcspHandler = buildOcspHandler(),
+        issuerFromStore: X509Certificate? = null,
+        allowSkipForTestCertificates: Boolean = false,
+    ): HandshakeCompletedListener {
+        val mockSocket = buildMockSocket()
+        val slot = slot<HandshakeCompletedListener>()
+        every { mockSocket.addHandshakeCompletedListener(capture(slot)) } just Runs
+        buildFactoryWithOcsp(
+            delegate = buildMockDelegate(mockSocket),
+            ocspHandler = ocspHandler,
+            issuerFromStore = issuerFromStore,
+            allowSkipForTestCertificates = allowSkipForTestCertificates,
+        ).createSocket("host", 443)
+        return slot.captured
+    }
+
+    private fun buildExtendedSession(
+        staple: ByteArray? = null,
+        peerHost: String = "valid.example.com",
+        cert: X509Certificate? = buildValidX509Cert(),
+    ): SSLSession {
+        val session = mockk<javax.net.ssl.ExtendedSSLSession>()
+        every { session.peerHost } returns peerHost
+        every { session.peerCertificates } returns if (cert != null) arrayOf(cert) else emptyArray()
+        every { session.cipherSuite } returns "TLS_AES_128_GCM_SHA256"
+        every { session.protocol } returns "TLSv1.3"
+        every { session.statusResponses } returns if (staple != null) listOf(staple) else emptyList()
+        return session
+    }
+
+    private fun buildNonExtendedSession(
+        peerHost: String = "valid.example.com",
+        cert: X509Certificate? = buildValidX509Cert(),
+    ): SSLSession = mockk<SSLSession>().also {
+        every { it.peerHost } returns peerHost
+        every { it.peerCertificates } returns if (cert != null) arrayOf(cert) else emptyArray()
+        every { it.cipherSuite } returns "TLS_AES_128_GCM_SHA256"
+        every { it.protocol } returns "TLSv1.3"
+    }
+
+    private fun buildHandshakeEventWithSession(
+        session: SSLSession,
+        eventSocket: SSLSocket = mockk(relaxed = true),
+    ): HandshakeCompletedEvent {
+        every { eventSocket.session } returns session
+        return HandshakeCompletedEvent(eventSocket, session)
+    }
+
+    private fun captureHandshakeListenerWithStapleCallback(
+        onStaple: (ByteArray?) -> Unit = {},
+    ): HandshakeCompletedListener {
+        val mockSocket = buildMockSocket()
+        val slot = slot<HandshakeCompletedListener>()
+        every { mockSocket.addHandshakeCompletedListener(capture(slot)) } just Runs
+        ZetaSslSocketFactory(buildMockDelegate(mockSocket), mockk(relaxed = true), onStaple)
+            .createSocket("host", 443)
+        return slot.captured
     }
 }

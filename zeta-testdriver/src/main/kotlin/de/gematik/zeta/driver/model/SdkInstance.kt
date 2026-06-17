@@ -49,6 +49,7 @@ public data class SdkInstance(
             disableServerValidation(
                 "true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()),
             )
+            contentNegotiation(true)
         }
     }
 }
@@ -73,6 +74,7 @@ public data class SdkInstanceConfig(
     public val poppToken: String = "",
     public val disableTlsVerification: Boolean = false,
     public val requiredOid: String = "",
+    public val filterHostHeaders: Boolean = true,
 ) {
     public companion object Companion {
         public fun fromEnv(): SdkInstanceConfig {
@@ -92,6 +94,7 @@ public data class SdkInstanceConfig(
                 poppToken = System.getenv("POPP_TOKEN") ?: "",
                 disableTlsVerification = "true".contentEquals((System.getenv(DISABLE_SERVER_VALIDATION) ?: "").lowercase()),
                 requiredOid = System.getenv("REQUIRED_ROLE_OID") ?: "",
+                filterHostHeaders = "true".equals(System.getenv("FILTER_HOST_HEADERS"), ignoreCase = true),
             )
         }
 
