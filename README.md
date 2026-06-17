@@ -186,8 +186,12 @@ values in the "gradle.properties" and the "local.properties" file.
 #### Publishing the SDK locally
 
 Before building any client that depends on the SDK via Maven, publish it to the local Maven repository:
+```bash
+RELEASE_VERSION=1.0.1-service-health ./gradlew publishJvmPublicationToMavenLocal
 ```
-./gradlew publishJvmPublicationToMavenLocal
+
+```bash
+RELEASE_VERSION=1.0.1-service-health ./gradlew publishKotlinMultiplatformPublicationToMavenLocal
 ```
 
 #### gradle.properties
@@ -306,9 +310,8 @@ These can be selected in the UI of the demo client.
 
 This step does not need an Android SDK.
 
-````
-./gradlew publishJvmPublicationToMavenLocal
-./gradlew publishKotlinMultiplatformToMavenLocal
+````bash
+./gradlew publishJvmPublicationToMavenLocal publishKotlinMultiplatformToMavenLocal
 ````
 
 #### Remote Maven Repository
@@ -326,13 +329,13 @@ The full tests and setups need an Android SDK:
 
 ##### Complete Build
 
-````
+````bash
 ./gradlew build
 ````
 
 ##### Running all Tests
 
-````
+````bash
 ./gradlew testAll
 ````
 

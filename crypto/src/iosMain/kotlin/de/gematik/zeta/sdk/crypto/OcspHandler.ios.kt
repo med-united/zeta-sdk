@@ -30,7 +30,11 @@ actual class OcspHandlerImpl actual constructor() : OcspHandler {
         TODO(notImplementedError)
     }
 
-    actual fun validate(
+    actual override fun getNextUpdateEpochSeconds(ocspResponseDer: ByteArray, certDer: ByteArray, issuerDer: ByteArray): Long? {
+        TODO("Not yet implemented")
+    }
+
+    actual override fun validate(
         ocspResponseDer: ByteArray,
         certDer: ByteArray,
         issuerDer: ByteArray,

@@ -31,7 +31,11 @@ actual class X509CertValidator actual constructor() {
         error(IMPLEMENT_PENDING)
     }
 
-    actual fun getExtendedKeyUsage(certDer: ByteArray): List<String> {
+    actual fun getProfessionOids(certDer: ByteArray): List<String> {
+        error(IMPLEMENT_PENDING)
+    }
+
+    actual fun getSanDnsNames(certDer: ByteArray): List<String> {
         error(IMPLEMENT_PENDING)
     }
 
