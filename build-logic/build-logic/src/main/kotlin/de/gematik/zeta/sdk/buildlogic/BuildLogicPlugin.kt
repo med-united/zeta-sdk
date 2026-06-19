@@ -223,6 +223,7 @@ fun Project.setupBuildLogic(block: Project.() -> Unit) {
 
         extensions.findByType<PublishingExtension>()?.apply {
             addGitlabRepository(project)
+            addMavenRepository(project)
         }
 
         extensions.findByType<MavenPublishBaseExtension>()?.apply {
@@ -272,6 +273,20 @@ fun PublishingExtension.addGitlabRepository(project: Project) {
             credentials {
                 username = "gitlab+deploy-token-1"
                 password = project.findProperty("gitLabDeployToken") as String? ?: System.getenv("DEPLOY_TOKEN")
+            }
+        }
+    }
+}
+
+fun PublishingExtension.addMavenRepository(project: Project) {
+    val repoUrl = System.getenv("MAVEN_REPOSITORY_URL") ?: return
+    repositories {
+        maven {
+            name = "GithubPackages"
+            url = project.uri(repoUrl)
+            credentials {
+                username = System.getenv("MAVEN_REPOSITORY_USERNAME")
+                password = System.getenv("MAVEN_REPOSITORY_PASSWORD")
             }
         }
     }
