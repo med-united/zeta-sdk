@@ -34,7 +34,7 @@ jobs:
           MAVEN_REPOSITORY_USERNAME: ${{ vars.MAVEN_REPOSITORY_USERNAME }}
           MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MAVEN_REPOSITORY_PASSWORD }}
         run: |
-          ./gradlew :zeta-sdk:publishAllPublicationsToGithubPackagesRepository \
+          ./gradlew publishAllPublicationsToGithubPackagesRepository \
             --configure-on-demand \
             -Pde.gematik.zeta.sdk.build-logic.enableAndroid=false \
             -Pde.gematik.zeta.sdk.build-logic.enableIOS=false \
