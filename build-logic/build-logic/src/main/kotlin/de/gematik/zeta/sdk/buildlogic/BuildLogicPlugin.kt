@@ -223,6 +223,7 @@ fun Project.setupBuildLogic(block: Project.() -> Unit) {
 
         extensions.findByType<PublishingExtension>()?.apply {
             addGitlabRepository(project)
+            addMavenRepository(project)
         }
 
         extensions.findByType<MavenPublishBaseExtension>()?.apply {
