@@ -230,7 +230,7 @@ fun Project.setupBuildLogic(block: Project.() -> Unit) {
                 javadocJar = isRunningOnCi,
                 sourcesJar = true,
             )
-            if(isRunningOnCi)
+            if (isRunningOnCi)
                 prepareForMavenCentralPublishing(project)
         }
 
@@ -271,6 +271,20 @@ fun PublishingExtension.addGitlabRepository(project: Project) {
             credentials {
                 username = System.getenv("MAVEN_REPOSITORY_USERNAME")
                 password = project.findProperty("gitLabDeployToken") as String? ?: System.getenv("MAVEN_REPOSITORY_PASSWORD")
+            }
+        }
+    }
+}
+
+fun PublishingExtension.addMavenRepository(project: Project) {
+    val repoUrl = System.getenv("MAVEN_REPOSITORY_URL") ?: return
+    repositories {
+        maven {
+            name = "GithubPackages"
+            url = project.uri(repoUrl)
+            credentials {
+                username = System.getenv("MAVEN_REPOSITORY_USERNAME")
+                password = System.getenv("MAVEN_REPOSITORY_PASSWORD")
             }
         }
     }
