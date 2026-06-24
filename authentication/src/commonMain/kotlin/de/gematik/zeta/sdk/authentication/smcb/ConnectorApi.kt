@@ -24,6 +24,7 @@
 
 package de.gematik.zeta.sdk.authentication.smcb
 
+import de.gematik.zeta.sdk.authentication.smcb.model.Base64Data
 import de.gematik.zeta.sdk.authentication.smcb.model.BinaryString
 import de.gematik.zeta.sdk.authentication.smcb.model.CertRefList
 import de.gematik.zeta.sdk.authentication.smcb.model.Context
@@ -97,7 +98,7 @@ class ConnectorApiImpl(
         val client = buildHttpClient(config)
         val request = ReadCardCertificate(
             cardHandle,
-            Context(mandantId, clientSystemId, workspaceId, userId),
+            Context(mandantId, clientSystemId, workspaceId),
             CertRefList(listOf("C.AUT")),
         )
         val response = client.post("CertificateService") {
@@ -122,7 +123,7 @@ class ConnectorApiImpl(
             cardHandle,
             Context(mandantId, clientSystemId, workspaceId, userId),
             OptionalInputs("urn:bsi:tr:03111:ecdsa"),
-            BinaryString(base64Challenge),
+            BinaryString(Base64Data(base64Challenge)),
         )
         val response = client.post("AuthSignatureService") {
             contentType(ContentType.Text.Xml)
