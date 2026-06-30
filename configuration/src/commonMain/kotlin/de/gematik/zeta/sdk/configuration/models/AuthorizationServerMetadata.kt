@@ -24,10 +24,14 @@
 
 package de.gematik.zeta.sdk.configuration.models
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonIgnoreUnknownKeys
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
+@JsonIgnoreUnknownKeys
 data class AuthorizationServerMetadata(
     val issuer: String,
     @SerialName("authorization_endpoint")
@@ -74,13 +78,18 @@ data class ApiVersion(
 
 @Serializable
 enum class ApiVersionStatus {
-    @SerialName("stable") STABLE,
+    @SerialName("stable")
+    STABLE,
 
-    @SerialName("beta") BETA,
+    @SerialName("beta")
+    BETA,
 
-    @SerialName("alpha") ALPHA,
+    @SerialName("alpha")
+    ALPHA,
 
-    @SerialName("deprecated") DEPRECATED,
+    @SerialName("deprecated")
+    DEPRECATED,
 
-    @SerialName("retired") RETIRED,
+    @SerialName("retired")
+    RETIRED,
 }
