@@ -50,6 +50,7 @@ setupBuildLogic {
 
         cinterops(libs.nativebuilds.openssl.headers) {
             definitionFile.set(file("src/desktopMain/cinterop/openssl.def"))
+            includeDirs("C:/msys64/mingw64/include")
         }
     }
 }

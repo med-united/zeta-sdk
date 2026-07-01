@@ -71,7 +71,7 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.readBytes // NOSONAR false positive - is required
+import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.refTo
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.toKString
@@ -154,38 +154,35 @@ actual class X509PemReader {
         val ptrVar = alloc<CPointerVar<UByteVar>>()
         certificateBytes.asUByteArray().usePinned { ptrVar.value = it.addressOf(0) }
         val cert = d2i_X509(null, ptrVar.ptr, certificateBytes.size.convert())
-        if (cert == null) throw IOException("d2i_X509: certPtr == $cert, ${getOpenSSLErrors()}")
+            ?: throw IOException("d2i_X509: cert is null, ${getOpenSSLErrors()}")
 
         val extOid = OBJ_txt2obj("1.3.36.8.3.3", 1)
-        if (extOid == null) throw IOException("OBJ_txt2obj: extOid == $extOid")
+            ?: throw IOException("OBJ_txt2obj: extOid is null")
 
         val extIndex = X509_get_ext_by_OBJ(cert, extOid, -1)
-        if (extIndex < 0) throw IOException("X509_get_ext_by_OBJ: extIndex == $extIndex")
+        if (extIndex < 0) return null // Extension not found
 
         val ext = X509_get_ext(cert, extIndex)
-        if (ext == null) throw IOException("X509_get_ext: ext == $ext")
+            ?: throw IOException("X509_get_ext: ext is null")
 
         val octet = X509_EXTENSION_get_data(ext)
-        if (octet == null) throw IOException("X509_EXTENSION_get_data: octet == $octet")
+            ?: throw IOException("X509_EXTENSION_get_data: octet is null")
 
         val der = ASN1_STRING_get0_data(octet)
-        if (der == null) throw IOException("ASN1_STRING_get0_data: der == $der")
+            ?: throw IOException("ASN1_STRING_get0_data: der is null")
 
         val len = ASN1_STRING_length(octet)
-        if (len <= 0) throw IOException("ASN1_STRING_length: len == $len")
+        if (len <= 0) return null
 
-        val pDer = alloc<CPointerVar<UByteVar>>()
-        pDer.value = der
-
+        val pDer = alloc<CPointerVar<UByteVar>> { value = der }
         val asn1 = d2i_ASN1_TYPE(null, pDer.ptr, len.convert())
+            ?: throw IOException("d2i_ASN1_TYPE: asn1 is null")
 
-        val seqString = asn1!!.pointed.value.asn1_string
+        val seqString = asn1.pointed.value.asn1_string
         val derPtr = ASN1_STRING_get0_data(seqString)
         val plen = ASN1_STRING_length(seqString)
 
-        val ppDer = alloc<CPointerVar<UByteVar>>()
-        ppDer.value = derPtr
-
+        val ppDer = alloc<CPointerVar<UByteVar>> { value = derPtr }
         val childSeq = d2i_ASN1_SEQUENCE_ANY(null, ppDer.ptr, plen.convert())
         findRegistrationNumber(childSeq)
     }
@@ -238,6 +235,7 @@ actual class X509PemReader {
             freeSequence(childSeq)
             result
         }
+        return false
     }
 
     private fun freeSequence(seq: CPointer<cnames.structs.stack_st_ASN1_TYPE>) {
