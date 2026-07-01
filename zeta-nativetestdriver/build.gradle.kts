@@ -33,13 +33,15 @@ setupBuildLogic {
             }
         }
 
-        sourceSets {
-            val nativeMain by getting {
-                dependencies {
-                    implementation(project(":zeta-sdk"))
-                    implementation(libs.ktor.server.cio)
-                    implementation(libs.ktor.server.content.negotiation)
-                    implementation(libs.ktor.kotlinx.serialization.json)
+        if (project.isLinuxEnabled || project.isMacOSEnabled) {
+            sourceSets {
+                val nativeMain by getting {
+                    dependencies {
+                        implementation(project(":zeta-sdk"))
+                        implementation(libs.ktor.server.cio)
+                        implementation(libs.ktor.server.content.negotiation)
+                        implementation(libs.ktor.kotlinx.serialization.json)
+                    }
                 }
             }
         }
