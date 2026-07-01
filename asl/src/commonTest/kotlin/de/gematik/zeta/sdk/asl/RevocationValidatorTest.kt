@@ -26,7 +26,7 @@ package de.gematik.zeta.sdk.asl
 
 import de.gematik.zeta.sdk.crypto.OcspHandler
 import de.gematik.zeta.sdk.crypto.OcspRequestData
-import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
+import de.gematik.zeta.sdk.network.http.client.validateRevocation
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -79,8 +79,33 @@ class RevocationValidatorTest {
     }
 
     @Test
-    fun validateRevocation_usesStagledOcsp_whenAvailable() = runTest {
-        val validator = FakeOcspHandler(producedAt = nowEpoch)
+    fun validateRevocation_fails_whenStapledOcspTooOld() = runTest {
+        val tooOld = nowEpoch - (25 * 3600)
+        val validator = FakeOcspHandler(
+            producedAt = tooOld,
+            nextUpdate = null,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            validateRevocation(
+                stapledOcspResponse = ocspResponseBytes,
+                certDer = certDer,
+                issuerDer = issuerDer,
+                ocspValidator = validator,
+                httpClient = mockHttpClient(),
+                allowSkipForTestCertificates = false,
+            )
+        }
+    }
+
+    @Test
+    fun validateRevocation_acceptsStaleStaple_whenNextUpdateInFuture() = runTest {
+        val producedAt = nowEpoch - (3 * 24 * 3600)
+        val nextUpdate = nowEpoch + (4 * 24 * 3600)
+        val validator = FakeOcspHandler(
+            producedAt = producedAt,
+            nextUpdate = nextUpdate,
+        )
+
         validateRevocation(
             stapledOcspResponse = ocspResponseBytes,
             certDer = certDer,
@@ -92,9 +117,13 @@ class RevocationValidatorTest {
     }
 
     @Test
-    fun validateRevocation_fails_whenStapledOcspTooOld() = runTest {
-        val tooOld = nowEpoch - (25 * 3600)
-        val validator = FakeOcspHandler(producedAt = tooOld)
+    fun validateRevocation_rejectsStaple_whenNextUpdateExpired() = runTest {
+        val nextUpdate = nowEpoch - 3600
+        val validator = FakeOcspHandler(
+            producedAt = nowEpoch - (8 * 24 * 3600),
+            nextUpdate = nextUpdate,
+        )
+
         assertFailsWith<IllegalArgumentException> {
             validateRevocation(
                 stapledOcspResponse = ocspResponseBytes,
@@ -105,6 +134,57 @@ class RevocationValidatorTest {
                 allowSkipForTestCertificates = false,
             )
         }
+    }
+
+    @Test
+    fun validateRevocation_fallsBackTo24H_whenNextUpdateAbsent() = runTest {
+        val validator = FakeOcspHandler(
+            producedAt = nowEpoch - 3600,
+            nextUpdate = null,
+        )
+        validateRevocation(
+            stapledOcspResponse = ocspResponseBytes,
+            certDer = certDer,
+            issuerDer = issuerDer,
+            ocspValidator = validator,
+            httpClient = mockHttpClient(),
+            allowSkipForTestCertificates = false,
+        )
+    }
+
+    @Test
+    fun validateRevocation_rejects_whenNextUpdateAbsentAndOlderThan24H() = runTest {
+        val validator = FakeOcspHandler(
+            producedAt = nowEpoch - (25 * 3600),
+            nextUpdate = null,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            validateRevocation(
+                stapledOcspResponse = ocspResponseBytes,
+                certDer = certDer,
+                issuerDer = issuerDer,
+                ocspValidator = validator,
+                httpClient = mockHttpClient(),
+                allowSkipForTestCertificates = false,
+            )
+        }
+    }
+
+    @Test
+    fun validateRevocation_usesStagledOcsp_whenAvailable() = runTest {
+        val validator = FakeOcspHandler(
+            producedAt = nowEpoch,
+            nextUpdate = nowEpoch + 3600,
+        )
+        validateRevocation(
+            stapledOcspResponse = ocspResponseBytes,
+            certDer = certDer,
+            issuerDer = issuerDer,
+            ocspValidator = validator,
+            httpClient = mockHttpClient(),
+            allowSkipForTestCertificates = false,
+        )
     }
 
     @Test
@@ -241,12 +321,19 @@ class RevocationValidatorTest {
     }
 
     private class FakeOcspHandler(
-        private val producedAt: Long = Clock.System.now().toEpochMilliseconds(),
+        private val producedAt: Long = Clock.System.now().epochSeconds,
+        private val nextUpdate: Long? = null,
         private val validateThrows: Exception? = null,
         private val crlUrl: String? = "https://crl.example.com",
         private val crlValidateThrows: Exception? = null,
     ) : OcspHandler {
         override fun getProducedAtEpochSeconds(ocspResponseDer: ByteArray) = producedAt
+        override fun getNextUpdateEpochSeconds(
+            ocspResponseDer: ByteArray,
+            certDer: ByteArray,
+            issuerDer: ByteArray,
+        ): Long? = nextUpdate
+
         override fun validate(ocspResponseDer: ByteArray, certDer: ByteArray, issuerDer: ByteArray) {
             validateThrows?.let { throw it }
         }
@@ -261,7 +348,7 @@ class RevocationValidatorTest {
     private fun mockHttpClient(
         responseBytes: ByteArray = byteArrayOf(10, 11, 12),
         throws: Boolean = false,
-    ): ZetaHttpClient {
+    ): HttpClient {
         val engine = MockEngine { request ->
             if (throws) error("Fetch failed for ${request.url}")
             respond(
@@ -269,6 +356,6 @@ class RevocationValidatorTest {
                 status = HttpStatusCode.OK,
             )
         }
-        return ZetaHttpClient(HttpClient(engine))
+        return HttpClient(engine)
     }
 }

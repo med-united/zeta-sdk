@@ -270,6 +270,26 @@ typedef struct {
 } ZetaSdk_AuthConfig;
 
 /**
+ * @brief proxy configuration for the ZETA SDK.
+ */
+typedef struct {
+    const char* host;     /**< Proxy host, e.g. "proxy.example.com" */
+    int         port;     /**< Proxy port, e.g. 8080 */
+    const char* username; /**< Optional proxy username. Pass NULL if not required. */
+    const char* password; /**< Optional proxy password. Pass NULL if not required. */
+    int         type;     /**< Proxy type: 0=HTTP, 1=SOCKS */
+} ZetaSdk_ProxyConfig;
+
+
+typedef struct {
+    char** additionalCaPem;
+    int    additionalCaPemCount;
+    char*  additionalCaFile;
+    bool   disableServerValidation;
+    bool   sslVerbose;
+} ZetaSdk_SecurityConfig;
+
+/**
  * @brief Top-level build configuration for creating a ZetaSdk_Client.
  *
  * All string fields are UTF-8 encoded, null-terminated strings owned by the caller.
@@ -284,7 +304,10 @@ typedef struct {
     ZetaSdk_TpmConfig*     tpmConfig;      /**< TPM configuration. Pass a zero-initialized instance for defaults. */
     ZetaSdk_AuthConfig*    authConfig;     /**< Authentication configuration. Must not be NULL. */
     ZetaSdk_LogVTable*     logVTable;      /**< Optional custom log provider. */
+    ZetaSdk_ProxyConfig*   proxyConfig;    /**< Optional proxy configuration. Pass NULL to disable proxy. */
+    ZetaSdk_SecurityConfig* securityConfig;
 } ZetaSdk_BuildConfig;
+
 
 /**
  * @brief Opaque handle representing an authenticated ZETA SDK client.

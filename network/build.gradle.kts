@@ -17,6 +17,7 @@ setupBuildLogic {
         sourceSets.commonMain.dependencies {
             api(project(":common"))
             api(project(":crypto"))
+            api(project(":storage"))
             api(libs.ktor.client.core)
             api(libs.ktor.serialisation)
             api(libs.ktor.client.logging)

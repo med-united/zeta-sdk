@@ -22,17 +22,19 @@
  * #L%
  */
 
-package de.gematik.zeta.sdk.asl
+package de.gematik.zeta.sdk.network.http.client
 
 import de.gematik.zeta.logging.Log
-import de.gematik.zeta.sdk.network.http.client.ZetaHttpClient
+import io.ktor.client.HttpClient
 import io.ktor.client.request.header
+import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsBytes
 
-internal suspend fun fetchOcspDirect(
+public suspend fun fetchOcspDirect(
     url: String,
     requestDer: ByteArray,
-    httpClient: ZetaHttpClient,
+    httpClient: HttpClient,
 ): ByteArray {
     Log.i { "Fetching OCSP from: $url (${requestDer.size} bytes)" }
 

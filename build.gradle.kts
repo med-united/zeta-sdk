@@ -1,9 +1,11 @@
+import com.github.benmanes.gradle.versions.updates.DependencyUpdatesTask
 import de.gematik.zeta.sdk.buildlogic.initBuildLogic
 
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 plugins {
     id("de.gematik.zeta.sdk.build-logic.base")
     id("de.gematik.zeta.sdk.build-logic.dokka")
+    id("com.github.ben-manes.versions") version "0.54.0"
     id("org.jetbrains.kotlinx.kover") version "0.9.2"
     id("org.sonarqube") version "7.2.3.7755"
     id("org.cyclonedx.bom") version "3.0.1"
@@ -79,6 +81,15 @@ subprojects {
     }
 }
 
+tasks.named<DependencyUpdatesTask>("dependencyUpdates") {
+    filterConfigurations = Spec { configuration ->
+        !configuration.name.let { name ->
+            name.contains("test", ignoreCase = true) ||
+                name.contains("cinterop", ignoreCase = true) ||
+                name.contains("cInterop", ignoreCase = true)
+        }
+    }
+}
 
 version = providers.environmentVariable("RELEASE_VERSION").orElse("latest").get()
 

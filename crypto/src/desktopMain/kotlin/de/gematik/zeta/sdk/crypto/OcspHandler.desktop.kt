@@ -51,19 +51,24 @@ import de.gematik.zeta.sdk.crypto.openssl.OCSP_resp_get0_produced_at
 import de.gematik.zeta.sdk.crypto.openssl.OCSP_response_get1_basic
 import de.gematik.zeta.sdk.crypto.openssl.OCSP_response_status
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_STACK
+import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_free
+import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_new_null
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_num
+import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_push
 import de.gematik.zeta.sdk.crypto.openssl.OPENSSL_sk_value
 import de.gematik.zeta.sdk.crypto.openssl.V_OCSP_CERTSTATUS_GOOD
 import de.gematik.zeta.sdk.crypto.openssl.X509
 import de.gematik.zeta.sdk.crypto.openssl.X509_CRL_free
 import de.gematik.zeta.sdk.crypto.openssl.X509_CRL_get0_by_cert
 import de.gematik.zeta.sdk.crypto.openssl.X509_CRL_verify
+import de.gematik.zeta.sdk.crypto.openssl.X509_NAME_oneline
 import de.gematik.zeta.sdk.crypto.openssl.X509_STORE_add_cert
-import de.gematik.zeta.sdk.crypto.openssl.X509_STORE_free
 import de.gematik.zeta.sdk.crypto.openssl.X509_STORE_new
+import de.gematik.zeta.sdk.crypto.openssl.X509_STORE_set_default_paths
 import de.gematik.zeta.sdk.crypto.openssl.X509_free
 import de.gematik.zeta.sdk.crypto.openssl.X509_get_ext_d2i
 import de.gematik.zeta.sdk.crypto.openssl.X509_get_pubkey
+import de.gematik.zeta.sdk.crypto.openssl.X509_get_subject_name
 import de.gematik.zeta.sdk.crypto.openssl.d2i_OCSP_RESPONSE
 import de.gematik.zeta.sdk.crypto.openssl.d2i_X509
 import de.gematik.zeta.sdk.crypto.openssl.d2i_X509_CRL
@@ -97,30 +102,46 @@ import platform.posix.tm
 actual class OcspHandlerImpl : OcspHandler {
     val failedToParseIssuerErrorMessage = "Failed to parse issuer"
     val failedToParseCertificateErrorMessage = "Failed to parse certificate"
-    actual override fun getProducedAtEpochSeconds(ocspResponseDer: ByteArray): Long = memScoped {
-        val pData = alloc<CPointerVar<UByteVar>>()
-        pData.value = ocspResponseDer.refTo(0).getPointer(this).reinterpret()
+    val failedToCreateCertificateIdErrorMessage = "Failed to create certificate ID"
+    actual override fun getProducedAtEpochSeconds(ocspResponseDer: ByteArray): Long =
+        withBasicResp(ocspResponseDer) { basicResp ->
+            val producedAt = OCSP_resp_get0_produced_at(basicResp.reinterpret())
+                ?: error("Failed to get producedAt")
+            val timeStr = ASN1_STRING_get0_data(producedAt.reinterpret())
+                ?.reinterpret<ByteVar>()?.toKString()
+                ?: error("Failed to get time string")
+            parseGeneralizedTime(timeStr)
+        }
 
-        val ocspResp = d2i_OCSP_RESPONSE(null, pData.ptr, ocspResponseDer.size.convert())
-            ?: error("Failed to parse OCSP response")
-
-        try {
-            val basicResp = OCSP_response_get1_basic(ocspResp)
-                ?: error("Failed to get basic OCSP response")
-
+    actual override fun getNextUpdateEpochSeconds(
+        ocspResponseDer: ByteArray,
+        certDer: ByteArray,
+        issuerDer: ByteArray,
+    ): Long? = withBasicResp(ocspResponseDer) { basicResp ->
+        withCertAndIssuer(certDer, issuerDer) { cert, issuer ->
+            val certId = OCSP_cert_to_id(null, cert, issuer)
+                ?: error(failedToCreateCertificateIdErrorMessage)
             try {
-                val producedAt = OCSP_resp_get0_produced_at(basicResp)
-                    ?: error("Failed to get producedAt")
+                val statusPtr = alloc<IntVar>()
+                val reasonPtr = alloc<IntVar>()
+                val revTimePtr = allocPointerTo<ASN1_GENERALIZEDTIME>()
+                val thisUpdPtr = allocPointerTo<ASN1_GENERALIZEDTIME>()
+                val nextUpdPtr = allocPointerTo<ASN1_GENERALIZEDTIME>()
 
-                val timeStr = ASN1_STRING_get0_data(producedAt.reinterpret())?.reinterpret<ByteVar>()?.toKString()
-                    ?: error("Failed to get time string")
-
+                val found = OCSP_resp_find_status(
+                    basicResp.reinterpret(), certId,
+                    statusPtr.ptr, reasonPtr.ptr,
+                    revTimePtr.ptr, thisUpdPtr.ptr, nextUpdPtr.ptr,
+                )
+                if (found != 1) return@withCertAndIssuer null
+                val nextUpd = nextUpdPtr.value ?: return@withCertAndIssuer null
+                val timeStr = ASN1_STRING_get0_data(nextUpd.reinterpret())
+                    ?.reinterpret<ByteVar>()?.toKString()
+                    ?: return@withCertAndIssuer null
                 parseGeneralizedTime(timeStr)
             } finally {
-                OCSP_BASICRESP_free(basicResp)
+                OCSP_CERTID_free(certId)
             }
-        } finally {
-            OCSP_RESPONSE_free(ocspResp)
         }
     }
 
@@ -129,6 +150,7 @@ actual class OcspHandlerImpl : OcspHandler {
         certDer: ByteArray,
         issuerDer: ByteArray,
     ) = memScoped {
+        Log.d { "[OCSP] Starting OCSP validation" }
         val pData = alloc<CPointerVar<UByteVar>>()
         pData.value = ocspResponseDer.refTo(0).getPointer(this).reinterpret()
 
@@ -137,6 +159,7 @@ actual class OcspHandlerImpl : OcspHandler {
 
         try {
             val status = OCSP_response_status(ocspResp)
+            Log.d { "[OCSP] Response status: $status (expected $OCSP_RESPONSE_STATUS_SUCCESSFUL)" }
             require(status == OCSP_RESPONSE_STATUS_SUCCESSFUL) {
                 "OCSP response status not successful: $status"
             }
@@ -149,24 +172,46 @@ actual class OcspHandlerImpl : OcspHandler {
                 pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
                 val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
                     ?: error(failedToParseCertificateErrorMessage)
+                Log.d { "[OCSP] Leaf cert parsed OK" }
 
                 val pIssuer = alloc<CPointerVar<UByteVar>>()
                 pIssuer.value = issuerDer.refTo(0).getPointer(this).reinterpret()
                 val issuer = d2i_X509(null, pIssuer.ptr, issuerDer.size.convert())
                     ?: error(failedToParseIssuerErrorMessage)
+                Log.d { "[OCSP] Issuer cert parsed OK" }
 
+                val issuerSubject = X509_get_subject_name(issuer)
+                if (issuerSubject != null) {
+                    val buf = ByteArray(256)
+                    X509_NAME_oneline(issuerSubject, buf.refTo(0), buf.size)
+                    Log.d { "[OCSP] Issuer subject: ${buf.toKString()}" }
+                }
+
+                val store = X509_STORE_new() ?: error("Failed to create X509 store")
                 try {
-                    val store = X509_STORE_new() ?: error("Failed to create X509 store")
+                    X509_STORE_add_cert(store, issuer)
+                    X509_STORE_set_default_paths(store)
+
+                    val certs = OPENSSL_sk_new_null()
                     try {
-                        X509_STORE_add_cert(store, issuer)
-                        val verifyResult = OCSP_basic_verify(basicResp, null, store, 0u)
-                        require(verifyResult == 1) { "OCSP signature verification failed" }
+                        OPENSSL_sk_push(certs, issuer)
+
+                        Log.d { "[OCSP] Calling OCSP_basic_verify with certs stack" }
+                        val verifyResult = OCSP_basic_verify(basicResp, certs?.reinterpret(), store, 0u)
+                        Log.d { "[OCSP] OCSP_basic_verify result: $verifyResult" }
+
+                        if (verifyResult != 1) {
+                            val opensslErrors = getOpenSSLErrors()
+                            Log.e { "[OCSP] OpenSSL errors: $opensslErrors" }
+                            error("OCSP signature verification failed")
+                        }
                     } finally {
-                        X509_STORE_free(store)
+                        OPENSSL_sk_free(certs)
                     }
 
                     val certId = OCSP_cert_to_id(null, cert, issuer)
-                        ?: error("Failed to create certificate ID")
+                        ?: error(failedToCreateCertificateIdErrorMessage)
+                    Log.d { "[OCSP] CertID created OK" }
 
                     try {
                         val statusPtr = alloc<IntVar>()
@@ -176,8 +221,10 @@ actual class OcspHandlerImpl : OcspHandler {
                         val nextUpdPtr = allocPointerTo<ASN1_GENERALIZEDTIME>()
 
                         val found = OCSP_resp_find_status(basicResp, certId, statusPtr.ptr, reasonPtr.ptr, revTimePtr.ptr, thisUpdPtr.ptr, nextUpdPtr.ptr)
+                        Log.d { "[OCSP] OCSP_resp_find_status found=$found status=${statusPtr.value}" }
                         require(found == 1) { "Certificate not found in OCSP response" }
                         require(statusPtr.value == V_OCSP_CERTSTATUS_GOOD) { "Certificate revoked" }
+                        Log.d { "[OCSP] Certificate status: GOOD" }
                     } finally {
                         OCSP_CERTID_free(certId)
                     }
@@ -209,7 +256,7 @@ actual class OcspHandlerImpl : OcspHandler {
             val ocspReq = OCSP_REQUEST_new() ?: error("Failed to create OCSP request")
 
             try {
-                val certId = OCSP_cert_to_id(null, cert, issuer) ?: error("Failed to create certificate ID")
+                val certId = OCSP_cert_to_id(null, cert, issuer) ?: error(failedToCreateCertificateIdErrorMessage)
                 OCSP_request_add0_id(ocspReq, certId)
                 OCSP_request_add1_nonce(ocspReq, null, -1)
 
@@ -345,6 +392,49 @@ actual class OcspHandlerImpl : OcspHandler {
             }
         } finally {
             X509_CRL_free(crl)
+        }
+    }
+
+    private fun <T> withBasicResp(ocspResponseDer: ByteArray, block: MemScope.(basicResp: CPointer<*>) -> T): T = memScoped {
+        val pData = alloc<CPointerVar<UByteVar>>()
+        pData.value = ocspResponseDer.refTo(0).getPointer(this).reinterpret()
+
+        val ocspResp = d2i_OCSP_RESPONSE(null, pData.ptr, ocspResponseDer.size.convert())
+            ?: error("Failed to parse OCSP response")
+
+        try {
+            val basicResp = OCSP_response_get1_basic(ocspResp)
+                ?: error("Failed to get basic OCSP response")
+            try {
+                block(basicResp)
+            } finally {
+                OCSP_BASICRESP_free(basicResp)
+            }
+        } finally {
+            OCSP_RESPONSE_free(ocspResp)
+        }
+    }
+
+    private fun <T> MemScope.withCertAndIssuer(
+        certDer: ByteArray,
+        issuerDer: ByteArray,
+        block: (cert: CPointer<X509>, issuer: CPointer<X509>) -> T,
+    ): T {
+        val pCert = alloc<CPointerVar<UByteVar>>()
+        pCert.value = certDer.refTo(0).getPointer(this).reinterpret()
+        val cert = d2i_X509(null, pCert.ptr, certDer.size.convert())
+            ?: error(failedToParseCertificateErrorMessage)
+
+        val pIssuer = alloc<CPointerVar<UByteVar>>()
+        pIssuer.value = issuerDer.refTo(0).getPointer(this).reinterpret()
+        val issuer = d2i_X509(null, pIssuer.ptr, issuerDer.size.convert())
+            ?: error(failedToParseIssuerErrorMessage)
+
+        try {
+            return block(cert, issuer)
+        } finally {
+            X509_free(cert)
+            X509_free(issuer)
         }
     }
 }

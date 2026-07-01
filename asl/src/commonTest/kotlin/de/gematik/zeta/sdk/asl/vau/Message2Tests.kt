@@ -859,7 +859,7 @@ private fun defaultEcPublicKey(
     )
 }
 
-private class FixedClock(
+class FixedClock(
     private val epochSeconds: Long,
 ) : Clock {
     override fun now(): Instant = Instant.fromEpochSeconds(epochSeconds)

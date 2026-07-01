@@ -36,8 +36,10 @@ data class AuthorizationServerMetadata(
     val tokenEndpoint: String,
     @SerialName("nonce_endpoint")
     val nonceEndpoint: String,
+    @SerialName("registration_endpoint")
+    val registrationEndpoint: String? = null,
     @SerialName("openid_providers_endpoint")
-    val openidProvidersEndpoint: String,
+    val openidProvidersEndpoint: String? = null,
     @SerialName("jwks_uri")
     val jwksUri: String,
     @SerialName("scopes_supported")
@@ -55,12 +57,23 @@ data class AuthorizationServerMetadata(
     @SerialName("service_documentation")
     val serviceDocumentation: String? = null,
     @SerialName("ui_locales_supported")
-    val uiLocalesSupported: List<String>,
+    val uiLocalesSupported: List<String>? = null,
     @SerialName("code_challenge_methods_supported")
     val codeChallengeMethodsSupported: List<String>,
     @SerialName("api_versions_supported")
     val apiVersionsSupported: List<ApiVersion>? = null,
-)
+) {
+    /**
+     * Temporary migration helper.
+     *
+     * New auth-server metadata uses `registration_endpoint`.
+     * Older deployments exposed the same endpoint as `openid_providers_endpoint`.
+     * Keep accepting both until all server environments are migrated.
+     */
+    val effectiveRegistrationEndpoint: String
+        get() = registrationEndpoint ?: openidProvidersEndpoint
+            ?: error("Authorization server metadata must contain registration_endpoint or legacy openid_providers_endpoint")
+}
 
 @Serializable
 data class ApiVersion(

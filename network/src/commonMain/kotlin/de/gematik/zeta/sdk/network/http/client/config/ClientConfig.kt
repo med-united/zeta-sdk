@@ -25,6 +25,8 @@
 package de.gematik.zeta.sdk.network.http.client.config
 
 import io.ktor.client.engine.HttpClientEngine
+import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
+import io.ktor.client.plugins.cookies.CookiesStorage
 import io.ktor.http.HttpMethod
 
 /**
@@ -122,6 +124,19 @@ public class ClientConfig {
      * @param engine The engine instance to use.
      */
     public fun engine(engine: HttpClientEngine) { engineFactory = { engine } }
+
+    /**
+     * Controls whether the [ContentNegotiation] plugin is installed on the HTTP client.
+     *
+     * When `true`, the client appends `Accept: application/json` to every request
+     * and supports automatic response body deserialization via `body<T>()`.
+     *
+     * Set to `false` (default) when using the client as a raw proxy to avoid polluting forwarded headers.
+     */
+    public var contentNegotiation: Boolean = false
+
+    /** Cookie storage used by this client config */
+    public var cookieStorage: CookiesStorage = AcceptAllCookiesStorage()
 }
 
 /**

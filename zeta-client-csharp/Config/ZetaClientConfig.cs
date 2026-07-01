@@ -34,8 +34,10 @@ public sealed class ZetaClientConfig
 
     public required ZetaAuthConfig Auth { get; init; }
     public ZetaStorageConfig? Storage { get; init; }
+    public ZetaProxyConfig? Proxy { get; init; }
     public Action<string, string?, string>? Logger { get; init; }
     public ZetaLogLevel LogLevel { get; init; } = ZetaLogLevel.Error;
+    public SecurityConfig Security { get; init; } = new();
 }
 
 public sealed class ZetaAuthConfig
@@ -87,4 +89,27 @@ public enum ZetaLogLevel
     Warn  = 2,
     Error = 3,
     None  = 4,
+}
+
+public sealed class ZetaProxyConfig
+{
+    public required string  Host     { get; init; }
+    public required int     Port     { get; init; }
+    public string? Username { get; init; }
+    public string? Password { get; init; }
+    public ZetaProxyType Type { get; init; } = ZetaProxyType.Http;
+}
+
+public enum ZetaProxyType
+{
+    Http  = 0,
+    Socks = 1,
+}
+
+public sealed class SecurityConfig
+{
+    public IReadOnlyList<string> AdditionalCaPem { get; init; } = [];
+    public string? AdditionalCaFile { get; init; }
+    public bool DisableServerValidation { get; init; }
+    public bool SslVerbose { get; init; }
 }

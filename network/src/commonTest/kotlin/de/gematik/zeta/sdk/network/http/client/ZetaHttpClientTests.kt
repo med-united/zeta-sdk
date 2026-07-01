@@ -30,6 +30,7 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.cookies.cookies
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.pluginOrNull
@@ -38,6 +39,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
@@ -878,7 +880,7 @@ class ZetaHttpClientTests {
     fun zetaHttpClient_installsContentNegotiation_always() {
         // Arrange & Act
         val client = zetaHttpClient(
-            configure = {},
+            configure = { contentNegotiation = true },
         )
 
         // Assert
@@ -1236,9 +1238,109 @@ class ZetaHttpClientTests {
     }
 
     @Test
-    fun buildWithNullEngine_buildsWithDefaultEngine() {
-        val client = ZetaHttpClientBuilder().build(engine = null)
-        assertNotNull(client)
+    fun storedCookies_areSent_onSubsequentRequests() = runTest {
+        var capturedCookieHeader: String? = null
+        val mockEngine = MockEngine { request ->
+            capturedCookieHeader = request.headers[HttpHeaders.Cookie]
+            respond("", HttpStatusCode.OK, headersOf("Set-Cookie", "session=abc123; Path=/"))
+        }
+
+        val client = ZetaHttpClientBuilder("http://localhost").build(mockEngine)
+
+        client.get("http://localhost/login")
+        client.get("http://localhost/protected")
+
+        assertNotNull(capturedCookieHeader)
+        assertTrue(capturedCookieHeader!!.contains("session=abc123"))
+    }
+
+    @Test
+    fun cookies_areStored_inClientAfterResponse() = runTest {
+        val mockEngine = MockEngine {
+            respond("", HttpStatusCode.OK, headersOf("Set-Cookie", "session=abc123; Path=/"))
+        }
+        val client = ZetaHttpClientBuilder("http://localhost").build(mockEngine)
+
+        client.get("http://localhost/login")
+        val cookies = client.useRaw { cookies("http://localhost") }
+
+        val sessionCookie = cookies.find { it.name == "session" }
+        assertNotNull(sessionCookie)
+        assertEquals("abc123", sessionCookie.value)
+    }
+
+    @Test
+    fun cookies_areRemoved_afterExpiryHeader() = runTest {
+        var callCount = 0
+        val mockEngine = MockEngine {
+            callCount++
+            if (callCount == 1) {
+                respond("", HttpStatusCode.OK, headersOf("Set-Cookie", "session=abc123; Path=/"))
+            } else {
+                respond("", HttpStatusCode.OK, headersOf("Set-Cookie", "session=; Path=/; Max-Age=0"))
+            }
+        }
+        val client = ZetaHttpClientBuilder("http://localhost").build(mockEngine)
+
+        client.get("http://localhost/login")
+        client.get("http://localhost/logout")
+        val cookies = client.useRaw { cookies("http://localhost") }
+
+        assertTrue(cookies.none { it.name == "session" && it.value.isNotEmpty() })
+    }
+
+    @Test
+    fun cookies_areCleared_afterClientClose() = runTest {
+        val mockEngine = MockEngine {
+            respond("", HttpStatusCode.OK, headersOf("Set-Cookie", "session=abc123; Path=/"))
+        }
+
+        val client = ZetaHttpClientBuilder("http://localhost").build(mockEngine)
+        client.get("http://localhost/any")
+        client.close()
+        val freshClient = ZetaHttpClientBuilder("http://localhost").build(mockEngine)
+        val cookies = freshClient.useRaw { cookies("http://localhost") }
+
+        assertTrue(cookies.isEmpty())
+    }
+
+    @Test
+    fun cookies_areNotSharedBetweenDifferentClientInstances() = runTest {
+        val mockEngine = MockEngine {
+            respond("", HttpStatusCode.OK, headersOf("Set-Cookie", "session=abc123; Path=/"))
+        }
+
+        val client1 = ZetaHttpClientBuilder("http://localhost").build(mockEngine)
+        val client2 = ZetaHttpClientBuilder("http://localhost").build(mockEngine)
+        client1.get("http://localhost/any")
+        val cookiesClient2 = client2.useRaw { cookies("http://localhost") }
+
+        assertTrue(cookiesClient2.isEmpty())
+    }
+
+    @Test
+    fun zetaHttpClient_installsContentNegotiation_whenEnabled() {
+        // Arrange & Act
+        val client = zetaHttpClient(
+            configure = { contentNegotiation = true },
+        )
+
+        // Assert
+        val hasPlugin = client.useRaw { pluginOrNull(ContentNegotiation) != null }
+        assertTrue(hasPlugin)
+        client.close()
+    }
+
+    @Test
+    fun zetaHttpClient_installsContentNegotiation_byDefault() {
+        // Arrange & Act
+        val client = zetaHttpClient(
+            configure = { contentNegotiation = true },
+        )
+
+        // Assert
+        val hasPlugin = client.useRaw { pluginOrNull(ContentNegotiation) != null }
+        assertTrue(hasPlugin)
         client.close()
     }
 

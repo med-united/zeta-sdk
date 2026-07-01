@@ -61,7 +61,7 @@ open class ClientRegistrationHandler(
             return CapabilityResult.Done
         }
 
-        val registrationResponse = attemptRegister(authServer.openidProvidersEndpoint)
+        val registrationResponse = attemptRegister(authServer.effectiveRegistrationEndpoint)
 
         val response = registrationResponse.getOrElse { exception ->
             exception as ClientRegistrationException
@@ -75,7 +75,7 @@ open class ClientRegistrationHandler(
 
         ctx
             .clientRegistrationStorage
-            .saveRegistration(authServer.issuer, response)
+            .saveRegistration(authServer.registrationEndpoint ?: authServer.issuer, response)
 
         return CapabilityResult.Done
     }

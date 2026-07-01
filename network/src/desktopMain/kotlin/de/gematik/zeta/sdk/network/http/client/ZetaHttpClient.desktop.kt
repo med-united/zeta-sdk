@@ -38,18 +38,74 @@ import de.gematik.zeta.sdk.network.http.client.config.tls.ZetaTlsValidator
 import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
 import io.ktor.client.engine.ProxyBuilder
+import io.ktor.client.engine.cio.CIO
 import io.ktor.client.engine.curl.Curl
 import io.ktor.client.engine.curl.CurlClientEngineConfig
 import io.ktor.client.engine.curl.SslVersion
+import io.ktor.client.engine.curl.internal.PendingRevocationData
+import io.ktor.client.engine.curl.internal.globalRevocationFn
+import io.ktor.client.engine.curl.internal.zetaRevocationFn
 import io.ktor.client.engine.curl.tls.LeafCertInfo
 import io.ktor.client.engine.curl.tls.TlsSessionData
 import io.ktor.client.engine.curl.tls.TlsValidationConfig
+import io.ktor.client.engine.curl.zeta_register_revocation_fn
 import io.ktor.client.engine.http
 import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.utils.io.charsets.Charsets
+import io.ktor.utils.io.core.toByteArray
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.staticCFunction
 import kotlinx.coroutines.runBlocking
 import kotlin.time.Clock
-internal actual fun buildPlatformClient(cfg: ClientConfig, commonSetup: HttpClientConfig<*>.() -> Unit): HttpClient =
-    HttpClient(Curl) {
+
+@OptIn(ExperimentalForeignApi::class)
+private fun initZetaRevocationCallback(
+    revocationFn: (staple: ByteArray?, certDer: ByteArray, issuerDer: ByteArray) -> Boolean,
+) {
+    Log.d { "[ZETA-TLS] initZetaRevocationCallback: registering" }
+
+    globalRevocationFn = revocationFn
+    zeta_register_revocation_fn(staticCFunction(::zetaRevocationFn))
+
+    Log.d { "[ZETA-TLS] initZetaRevocationCallback: done" }
+}
+
+private fun validateRevocationBlocking(
+    staple: ByteArray?,
+    certDer: ByteArray,
+    issuerDer: ByteArray,
+): Boolean = runCatching {
+    Log.d { "[ZETA-TLS] validateRevocationBlocking: staple=${staple?.size} certDer=${certDer.size} issuerDer=${issuerDer.size}" }
+    val client = HttpClient(CIO) {
+        engine { requestTimeout = 10_000 }
+    }
+    try {
+        runBlocking {
+            validateRevocation(
+                stapledOcspResponse = staple,
+                certDer = certDer,
+                issuerDer = issuerDer,
+                httpClient = client,
+            )
+        }
+    } finally {
+        client.close()
+    }
+}.onFailure {
+    Log.e { "[ZETA-TLS] validateRevocationBlocking FAILED: ${it.message}" }
+}.isSuccess
+
+internal actual fun buildPlatformClient(
+    cfg: ClientConfig,
+    commonSetup: HttpClientConfig<*>.() -> Unit,
+): HttpClient {
+    Log.d { "[ZETA-TLS] buildPlatformClient: registering revocation callback" }
+
+    initZetaRevocationCallback(::validateRevocationBlocking)
+
+    Log.d { "[ZETA-TLS] buildPlatformClient: building curl client" }
+
+    return HttpClient(Curl) {
         engine {
             applyTlsConfig(cfg.security)
             applyProxyConfig(cfg.network.proxyConfig)
@@ -57,82 +113,107 @@ internal actual fun buildPlatformClient(cfg: ClientConfig, commonSetup: HttpClie
         install(WebSockets)
         commonSetup(this)
     }
+}
 
 private fun CurlClientEngineConfig.applyTlsConfig(security: SecurityConfig) {
+    Log.d { "[ZETA-TLS] applyTlsConfig: disableServerValidation=${security.disableServerValidation} additionalCaPem=${security.additionalCaPem.size} items additionalCaFile=${security.additionalCaFile}" }
+
     sslVerify = !security.disableServerValidation
     sslVerifyStatus = false
     security.additionalCaFile?.let { caInfo = it }
-    sslVersion = SslVersion.TLS_1_2
-    sslCipherList = ZetaCipherSuites.FULL_PREFERRED_ORDER.joinToString(":")
-    tls13Ciphers = ZetaCipherSuites.TLS_1_3_SUITES.joinToString(":")
-    sslEcCurves = ZetaTlsCurves.ALLOWED.joinToString(":")
-    sslSignatureAlgorithms = ZetaSignatureAlgorithms.ALLOWED.joinToString(":")
+
+    val pemBlob = security.additionalCaPem
+        .filter { it.isNotBlank() }
+        .takeIf { it.isNotEmpty() }?.joinToString("\n")?.toByteArray(Charsets.UTF_8)
+
+    if (pemBlob != null) {
+        Log.d { "[ZETA-TLS] applyTlsConfig: caPemBlob ${pemBlob.size} bytes" }
+        caPemBlob = pemBlob
+    } else {
+        Log.d { "[ZETA-TLS] applyTlsConfig: no caPem to apply" }
+    }
+
+    sslVerbose = security.sslVerbose
 
     if (!security.disableServerValidation) {
-        tlsValidationConfig = TlsValidationConfig(onSessionValidated = ::validateSession)
+        sslVersion = SslVersion.TLS_1_2_TO_1_3
+        sslCipherList = ZetaCipherSuites.FULL_PREFERRED_ORDER.joinToString(":")
+        tls13Ciphers = ZetaCipherSuites.TLS_1_3_SUITES.joinToString(":")
+        sslEcCurves = ZetaTlsCurves.ALLOWED.joinToString(":")
+        sslSignatureAlgorithms = ZetaSignatureAlgorithms.ALLOWED.joinToString(":")
+        tlsValidationConfig = TlsValidationConfig(
+            onSessionValidated = ::validateSession,
+        )
     }
 }
 
-private fun validateSession(sessionData: TlsSessionData) {
+internal fun validateSession(sessionData: TlsSessionData): PendingRevocationData? {
+    Log.d { "[ZETA-TLS] validateSession: host=${sessionData.host} protocol=${sessionData.protocol} cipher=${sessionData.cipherSuite}" }
+
+    val leafCertInfo = sessionData.leafCertInfo ?: run {
+        Log.e { "[ZETA-TLS] validateSession: NO leaf cert, rejecting" }
+        error("TLS compliance failure: leaf certificate missing")
+    }
+
+    Log.d { "[ZETA-TLS] validateSession: subject=${leafCertInfo.subjectDN} sigAlg=${leafCertInfo.sigAlgSn} keyType=${leafCertInfo.keyTypeName} keyBits=${leafCertInfo.keyBits} curve=${leafCertInfo.curveName} san=${leafCertInfo.san}" }
+
     val tlsResult = ZetaTlsValidator.validateHandshake(
         negotiatedCipher = sessionData.cipherSuite!!,
         negotiatedProtocol = sessionData.protocol!!,
-        negotiatedCurve = sessionData.leafCertInfo?.curveName,
+        negotiatedCurve = leafCertInfo.curveName,
+    )
+    Log.d { "[ZETA-TLS] tlsResult: compliant=${tlsResult.isCompliant} errors=${tlsResult.errors} warnings=${tlsResult.warnings}" }
+
+    val certResult = ZetaCertificateValidator.validate(
+        leafCertInfo.toZetaCertInfo(),
+        Clock.System.now().epochSeconds,
+        sessionData.host,
     )
 
-    val negotiatedCurve = sessionData.leafCertInfo?.curveName
-    if (negotiatedCurve != null && negotiatedCurve !in ZetaTlsCurves.ALLOWED) {
-        Log.e { "Handshake failed: curve $negotiatedCurve not in allowed list ${ZetaTlsCurves.ALLOWED}" }
-        error("TLS compliance failure: negotiated curve $negotiatedCurve is not allowed")
-    }
+    Log.d { "[ZETA-TLS] certResult: valid=${certResult.isValid} errors=${certResult.errors}" }
 
-    val certResult = sessionData.leafCertInfo?.let {
-        ZetaCertificateValidator.validate(it.toZetaCertInfo(), Clock.System.now().epochSeconds, sessionData.host)
-    }
-
-    val errors = tlsResult.errors + (certResult?.errors ?: emptyList())
-    val isCompliant = tlsResult.isCompliant && (certResult?.isValid != false)
-
+    val errors = tlsResult.errors + certResult.errors
+    val isCompliant = tlsResult.isCompliant && certResult.isValid
     if (!isCompliant) {
-        Log.e { "Handshake NON-COMPLIANT errors=$errors" }
+        Log.d { "[ZETA-TLS] validateSession: NON-COMPLIANT errors=$errors" }
         error("TLS compliance failure: $errors")
     }
 
     tlsResult.warnings.forEach { Log.w { "ZetaTls: $it" } }
+    Log.d { "[ZETA-TLS] validateSession: compliant" }
 
-    sessionData.leafCertInfo?.let { leaf ->
-        val certDer = leaf.certDer ?: return@let
-        val issuerDer = leaf.issuerDer ?: return@let
-        try {
-            runBlocking {
-                RevocationChecker().checkRevocation(
-                    certDer = certDer,
-                    issuerDer = issuerDer,
-                )
-            }
-        } catch (e: CertificateRevokedException) {
-            error("Certificate revoked: ${e.message}")
-        } catch (e: Exception) {
-            Log.e { "Revocation check unavailable: ${e.message}" }
-            error("Revocation check failed: ${e.message}")
-        }
-    }
+    return null
 }
 
 private fun CurlClientEngineConfig.applyProxyConfig(proxyConfig: ProxyConfig?) {
-    proxyConfig ?: return
+    if (proxyConfig == null) {
+        Log.i { "[SDK-PROXY] No proxy configured" }
+        return
+    }
+    Log.i { "[SDK-PROXY] Configuring proxy: ${proxyConfig.type} ${proxyConfig.host}:${proxyConfig.port}" }
     proxy = when (proxyConfig.type) {
-        ProxyType.HTTP -> ProxyBuilder.http("http://${proxyConfig.host}:${proxyConfig.port}")
-
+        ProxyType.HTTP -> {
+            val credentials = if (proxyConfig.username != null && proxyConfig.password != null) {
+                "${proxyConfig.username}:${proxyConfig.password.concatToString()}@"
+            } else {
+                ""
+            }
+            val url = "http://$credentials${proxyConfig.host}:${proxyConfig.port}"
+            Log.i { "[SDK-PROXY] Setting HTTP proxy: http://${proxyConfig.host}:${proxyConfig.port}" }
+            ProxyBuilder.http(url)
+        }
         ProxyType.SOCKS -> {
             val credentials = if (proxyConfig.username != null && proxyConfig.password != null) {
                 "${proxyConfig.username}:${proxyConfig.password.concatToString()}@"
             } else {
                 ""
             }
-            ProxyBuilder.http("socks5://$credentials${proxyConfig.host}:${proxyConfig.port}")
+            val url = "socks5://$credentials${proxyConfig.host}:${proxyConfig.port}"
+            Log.i { "[SDK-PROXY] Setting SOCKS proxy: $url" }
+            ProxyBuilder.http(url)
         }
     }
+    Log.i { "[SDK-PROXY] Proxy configured successfully" }
 }
 
 internal fun LeafCertInfo.toZetaCertInfo() = ZetaCertInfo(
@@ -154,10 +235,7 @@ private fun String.toCanonicalSigAlgName(): String = when (
         .replace(" ", "")
 ) {
     "ECDSASHA256", "ECDSAWITHSHA256", "SHA256WITHECDSA" -> "SHA256WITHECDSA"
-
     "ECDSASHA384", "ECDSAWITHSHA384", "SHA384WITHECDSA" -> "SHA384WITHECDSA"
-
     "ECDSASHA512", "ECDSAWITHSHA512", "SHA512WITHECDSA" -> "SHA512WITHECDSA"
-
     else -> this
 }

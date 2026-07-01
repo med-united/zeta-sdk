@@ -196,16 +196,41 @@ int main() {
             ZETA_LOG_LEVEL_DEBUG
     };
 
+    ZetaSdk_ProxyConfig proxyConfig = {
+            "127.0.0.1",
+            8080,
+            "user",     // username, NULL if not required
+            "password", // password, NULL if not required
+            0           // type: 0=HTTP
+    };
+
+    char* caPem[] = {
+            const_cast<char*>(R"(-----BEGIN CERTIFICATE-----
+...
+                -----END CERTIFICATE-----)")
+                    };
+
+    const char* caPemFile = "/path/to/ca.crt";
+
+    ZetaSdk_SecurityConfig security = {};
+    security.additionalCaPem = const_cast<char**>(caPem);
+    security.additionalCaPemCount = 1;
+    //security.additionalCaFile = const_cast<char*>(caPemFile);
+    //security.disableServerValidation = disableTls;
+    //security.sslVerbose = false;
+
     ZetaSdk_BuildConfig buildConfig = {
             resource,
             const_cast<char*>(PRODUCT_ID),
             const_cast<char*>(PRODUCT_VERSION),
             const_cast<char*>(CLIENT_NAME),
             &storageConfig, &tpmConfig, &authConfig,
-            &logVTable
+            &logVTable,
+            nullptr,
+            &security
     };
 
-    ZetaSdk_Client*     zetaSdkClient  = (ZetaSdk_Client*)ZetaSdk_buildZetaClient(&buildConfig, disableTls);
+    ZetaSdk_Client*     zetaSdkClient  = (ZetaSdk_Client*)ZetaSdk_buildZetaClient(&buildConfig);
     ZetaSdk_HttpClient* zetaHttpClient = (ZetaSdk_HttpClient*)ZetaSdk_buildHttpClient(zetaSdkClient);
 
     runSample(zetaHttpClient, poppToken);
